@@ -1,0 +1,158 @@
+tagging_schedule_interval: 10
+disktasks_schedule_interval: 10m
+fullsync_interval: 60m
+
+qb_instances:
+  # client 1
+  - name: qbit1
+    enabled: true
+    url: http://localhost:8080
+    user: admin
+    password: adminadmin
+    local_instance: true #toggle global para todas aquellas operaciones de disco
+    dryrun: true
+    commands:
+      tag_issues: true
+      tag_rename: true
+      tag_trackers: true
+      tag_HR: true
+      tag_lowseeds: false
+      tag_HUNO: true
+      scan_no_tmm: true
+      share_limits: true
+      tag_noHL: true
+      clean_orphaned: true
+      prune_orphaned: true
+    folders:
+      root_path: '/mnt/data/torrents'
+      orphaned_path: '/mnt/data/torrents/.orphaned_data'
+    translation_table:
+      /data: /mnt/data
+    share_limits:
+      noDUPE:
+        include_all_tags:
+          - ~DUPE
+        max_seeding_time: 0
+      H&R:
+        include_all_tags:
+          - ~H&R
+        max_seeding_time: -1
+        max_ratio: -1
+      noHL:
+        include_all_tags:
+          - ~noHL
+        max_seeding_time: 90d
+      default:
+        max_seeding_time: -2
+        max_ratio: -2
+        add_group_to_tag: false
+  # client 2
+  - name: qbit2
+    enabled: true
+    url: https://localhost:18080
+    user: admin
+    password: adminadmin
+    local_instance: false
+    dryrun: true
+    commands:
+      tag_issues: true
+      tag_rename: true
+      tag_trackers: true
+      tag_HR: true
+      tag_lowseeds: true
+      tag_HUNO: true
+      scan_no_tmm: true
+      share_limits: true
+      local_instance: false
+    share_limits:
+      default:
+        max_seeding_time: -2
+        max_ratio: -2
+        add_group_to_tag: false
+
+share_limits_tag_prefix: ~sl.
+
+scan_dupes: true
+dupe_tag: ~DUPE
+
+issue_tag: ~issue
+
+min_seeds: 3
+lowseeds_tag: ~lowSeeds
+
+noHL_tag: ~noHL
+noHL_categories:
+  - movies
+  - tv
+  - audiobooks
+  - adult
+  - whisparr
+  - xseed
+
+prune_orphaned_time: 5d
+
+noTMM_tag: ~noTMM
+enable_tmm: false
+tmm_ignoretags:
+  # - xs
+tmm_ignored_categories:
+  - xseed
+  - cross-seed-link
+  - manual
+
+tags_to_rename:
+  cross-seed: xs
+  sonarr.cross-seed: xs.tv
+  tv.cross-seed: xs.tv
+  radarr.cross-seed: xs.movies
+  movies.cross-seed: xs.movies
+
+hr_tag: ~H&R
+extra_seed_time: 5h
+extra_ratio: 0.1
+exclude_xseed: true
+autostart_hr: false
+# HR: [time, ratio, downloaded percent]
+tracker_details:
+  myanonamouse:
+    tag: MAM
+    HR: [3d]
+    category: ebooks
+  aither:
+    tag: ATH
+    HR: [5d, null, 20]
+  blutopia:
+    tag: BLU
+    HR: [7d, null, 10]
+  torrentleech|tleechreload:
+    tag: TL
+    HR: [7d, 1, 10]
+  fearnopeer:
+    tag: FNP
+  avistaz:
+    tag: aZ
+    HR: [7d, 0.9, 10]
+  filelist|thefl:
+    tag: FL
+    HR: [2d, 1]
+  digitalcore:
+    tag: DC
+    HR: [5d, 1, 10]
+  seedpool:
+    tag: SP
+    HR: [10d, null, 10]
+  opsfet.ch:
+    tag: OPS
+  reelflix:
+    tag: RFLX
+  hawke:
+    tag: HUNO
+    HR: [5d, null, 10] # son 5d, pero sacamos muchos puntos los primeros 10d
+  lst:
+    tag: LST
+    HR: [3d, null, 10]
+  beyond-hd:
+    tag: BHD
+    HR: [5d, 1, 30]
+  default:
+    tag: other
