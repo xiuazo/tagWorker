@@ -608,7 +608,7 @@ class TagWorker:
         if not torrents:
             return False
 
-        logger.info(f'%-10s - adjusting {len(torrents)} torrents sharelimits', self.name)
+        logger.info(f'%-10s - analyzing {len(torrents)} torrents sharelimits', self.name)
 
         profiles = self.share_limits
         tagprefix = TagWorker.appconfig.share_limits_tag_prefix
@@ -642,18 +642,20 @@ class TagWorker:
 
                 break # torrent classified, go next one
 
-        changes = False
+        addtag, deltag = set(), set()
+        changes = 0
         # apply limits to dict
         for group_name, hashes in torrent_profiles_dict.items():
             tagname = profiles[group_name].get('custom_tag', tagprefix + group_name)
             # tag
             if profiles[group_name].get('add_group_to_tag', True):
-                client.add_tags(hashes, tagname)
-                # en cada perfil le quito el tag a todos aquellos que han tenido cambio de estado y no lo deben llevar
-                tagged_wrong = set(torrents.keys()) - set(hashes)
-                if tagged_wrong:
-                    client.remove_tags(tagged_wrong, tagname)
-                changes = True
+                # no lo tiene y lo merece
+                addtag = {h for h in hashes if tagname not in torrents[h].get('tags', {}).split(", ")}
+                if addtag: client.add_tags(addtag, tagname)
+            # lo tiene y no lo merece
+            deltag = {h for h, t in torrents.items() if h not in hashes and tagname in t.get('tags', {}).split(", ")}
+            if deltag: client.remove_tags(deltag, tagname)
+            if addtag or deltag: changes += len(addtag) + len(deltag)
 
             # ratio and limit
             p_maxratio = profiles[group_name].get('max_ratio', -2)
@@ -667,9 +669,10 @@ class TagWorker:
                     'ratio': p_maxratio,
                     'time':p_maxtime
                 }
+            logger.debug(f"{self.name:<10} - {len(hashes)} torrents {tagname}. (tagged {len(addtag)}/untagged {len(deltag)})")
             client.sharelimit(hashes, limits)
             client.uploadlimit(hashes, p_uplimit)
-
+        logger.info(f"{self.name:<10} - {changes} torrents have been adjusted")
         return changes
 
 # ============================================
