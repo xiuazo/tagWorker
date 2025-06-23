@@ -38,6 +38,7 @@ class TagWorker:
 
         self.stop_event = threading.Event()
         self.tag_idle = threading.Event()
+        self.tag_trigger = threading.Event()
         self.disk_idle = threading.Event()
         # si tags espera por el disco y el disco espera por tags... malo. iniciamos asi para iniciar por los tags (es quien hace sync)
         self.tag_idle.clear()
@@ -68,7 +69,6 @@ class TagWorker:
         watched_props = [prop] if isinstance(prop, str) else prop
         all_torrents = self.client.status.get('torrents', {})
         return {th: all_torrents[th] for th, tv in changed_t.items() if not watched_props or (watched_props & tv.keys())}
-
 
     def task_tag(self):
         commands = self.commands
@@ -120,11 +120,12 @@ class TagWorker:
                     logger.debug(f"{self.name:<10} - no more changes made. sleeping...")
                     verbose = None
                 self.tag_idle.set()
-                self.stop_event.wait(parse(TagWorker.appconfig.tagging_schedule_interval))
+                self.tag_trigger.wait(timeout=parse(TagWorker.appconfig.tagging_schedule_interval))
+                self.tag_trigger.clear()
             else:
                 verbose = True
                 logger.debug(f"{self.name:<10} - changes have been made. looping...")
-                self.stop_event.wait(2) # delay para que qbit aplique cambios
+                self.stop_event.wait(2) # delay para que qbit aplique cambios. no uso tag_trigger pq no quiero que disk_task lo arranque. es un delay interrumpible, sin mas
 
     def task_disk(self):
         commands = self.commands
@@ -142,21 +143,21 @@ class TagWorker:
                 if commands.get('tag_noHL'):
                     logger.info('%-10s - checking hardlinks', self.name)
                     self.disk_noHL()
-                if commands.get('clean_orphaned'): # and folders.get('root_path'):
+                if commands.get('clean_orphaned'):
                     logger.info('%-10s - moving orphan files', self.name)
                     self.disk_clean_orphans()
 
-                if commands.get('prune_orphaned'): # and folders.get('orphaned_path'):
+                if commands.get('prune_orphaned'):
                     logger.info('%-10s - pruning old orphans', self.name)
                     self.disk_prune_old()
             except Exception as e:
-                # logger.error(f"Error {e}")
                 logger.error(f"Error: {e}\n{traceback.format_exc()}")
 
             logger.info(f"{self.name:<10} - disk task ended")
-            # TODO en este punto se podria activar el task_tag para que reaccione a los nuevos noHL??
             self.disk_idle.set()
-            self.stop_event.wait(parse(TagWorker.appconfig.disktasks_schedule_interval))
+            logger.debug(f"{self.name:<10} - disk task triggering tag task")
+            self.tag_trigger.set()
+            self.stop_event.wait(timeout=parse(TagWorker.appconfig.disktasks_schedule_interval))
 
     def disk_clean_orphans(self):
         root_path = self.folders.get('root_path')
@@ -721,6 +722,7 @@ def main():
             try:
                 logger.info(f'%-10s - Stopping instance', instance.name)
                 instance.stop_event.set()
+                instance.tag_trigger.set()
                 instance.client.logout()
             except Exception as e:
                 logger.error(f"%-10s - Unable to stop instance", instance.name)
