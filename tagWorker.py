@@ -134,6 +134,7 @@ class TagWorker:
             return
 
         while not self.stop_event.is_set():
+            tagged = False
             try:
                 wait_for_event("tag_done", self.tag_idle, self.name)
                 self.disk_idle.clear()
@@ -142,7 +143,7 @@ class TagWorker:
 
                 if commands.get('tag_noHL'):
                     logger.info('%-10s - checking hardlinks', self.name)
-                    self.disk_noHL()
+                    tagged = self.disk_noHL()
                 if commands.get('clean_orphaned'):
                     logger.info('%-10s - moving orphan files', self.name)
                     self.disk_clean_orphans()
@@ -153,10 +154,11 @@ class TagWorker:
             except Exception as e:
                 logger.error(f"Error: {e}\n{traceback.format_exc()}")
 
-            logger.info(f"{self.name:<10} - disk task ended")
+            logger.info(f"{self.name:<10} - disk task done")
             self.disk_idle.set()
-            logger.debug(f"{self.name:<10} - disk task triggering tag task")
-            self.tag_trigger.set()
+            if tagged:
+                logger.debug(f"{self.name:<10} - triggering tag task")
+                self.tag_trigger.set()
             self.stop_event.wait(timeout=parse(TagWorker.appconfig.disktasks_schedule_interval))
 
     def disk_clean_orphans(self):
@@ -240,15 +242,15 @@ class TagWorker:
         torrents = self.client.status.get('torrents', {})
         translation_table = self.translation_table
 
-        hashes = set()
+        noHLs, addtag, deltag = set(), set(), set()
         inodo_mapa = build_inode_map(raiz)
 
         for thash, torrent in torrents.items():
-            file = torrent['content_path']
-            realfile = translate_path(file, translation_table)
-
             if torrent['category'] not in TagWorker.appconfig.noHL_categories:
                 continue
+
+            file = torrent['content_path']
+            realfile = translate_path(file, translation_table)
             if not is_file(realfile):
                 # FIXME iterar contenidos del content_path. si hay algun HL lo damos por bueno
                 resultado = False
@@ -263,11 +265,20 @@ class TagWorker:
                         break
             else:
                 resultado = verificar_hardlinks(realfile, inodo_mapa)
+            noHL_tag = TagWorker.appconfig.noHL_tag
+            tagged = noHL_tag in torrent['tags'].split(", ")
             if not resultado:
-                hashes.add(thash)
+                noHLs.add(thash)
+                if not tagged:
+                    addtag.add(thash)
+            elif tagged:
+                deltag.add(thash)
 
-        self.client.remove_tags(torrents.keys() - hashes, TagWorker.appconfig.noHL_tag)
-        self.client.add_tags(hashes, TagWorker.appconfig.noHL_tag)
+        if addtag: self.client.add_tags(addtag, noHL_tag)
+        if deltag: self.client.remove_tags(deltag, noHL_tag)
+
+        logger.info(f"{self.name:<10} - Found {len(noHLs)} noHL. Tagged {len(addtag)} - Untagged {len(deltag)}")
+        return bool(addtag or deltag)
 
     def tag_lowseeds(self):
         torrents = self.torrents_changed({'num_seeds', 'tags', 'tracker', 'state'})
@@ -326,7 +337,7 @@ class TagWorker:
         if addtag: self.client.add_tags(addtag, config.dupe_tag) # taguea dupes
         if deltag: self.client.remove_tags(deltag, config.dupe_tag)
 
-        logger.info(f"{self.name:<10} - Found {len(dupes)} dupes across all clients. Tagged {len(addtag)}. Untagged {len(deltag)}")
+        logger.info(f"{self.name:<10} - Found {len(dupes)} dupes across all clients. Tagged {len(addtag)} - Untagged {len(deltag)}")
 
         return bool(addtag or deltag)
 
