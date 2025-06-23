@@ -72,7 +72,6 @@ class TagWorker:
 
     def task_tag(self):
         commands = self.commands
-        verbose = None
 
         while not self.stop_event.is_set():
             wait_for_event("disk_done", self.disk_idle, self.name)
@@ -88,7 +87,7 @@ class TagWorker:
 
             curr_torrents = set(self.client.status.get('torrents', {}).keys())
             if curr_torrents != prev_torrents:
-                logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need for checking dupes")
+                logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need to check dupes")
                 # podria estar ya a true y con alguna instancia ya reaccionada. estas se lo podrian perder
                 TagWorker.instance_reactions = {key: False for key in TagWorker.instance_reactions}
 
@@ -106,7 +105,6 @@ class TagWorker:
                 'tag_rename': self.tag_rename,
                 'tag_lowseeds': self.tag_lowseeds,
                 'tag_HUNO': self.tag_HUNO,
-                'share_limits': self.tag_SL, # SL should be last!
             }
 
             for key, func in tag_funcs.items():
@@ -116,14 +114,13 @@ class TagWorker:
                     tags_changed |= changes
 
             if not tags_changed:
-                if verbose:
-                    logger.debug(f"{self.name:<10} - no more changes made. sleeping...")
-                    verbose = None
+                # cuando los tags están en orden es cuando ajustamos SL
+                if commands.get('share_limits', False): self.tag_SL()
+                # logger.debug(f"{self.name:<10} - sleeping {parse(TagWorker.appconfig.tagging_schedule_interval)}s...")
                 self.tag_idle.set()
                 self.tag_trigger.wait(timeout=parse(TagWorker.appconfig.tagging_schedule_interval))
                 self.tag_trigger.clear()
             else:
-                verbose = True
                 logger.debug(f"{self.name:<10} - changes have been made. looping...")
                 self.stop_event.wait(2) # delay para que qbit aplique cambios. no uso tag_trigger pq no quiero que disk_task lo arranque. es un delay interrumpible, sin mas
 
@@ -142,14 +139,14 @@ class TagWorker:
                 logger.info(f"{self.name:<10} - disk task started")
 
                 if commands.get('tag_noHL'):
-                    logger.info('%-10s - checking hardlinks', self.name)
+                    logger.info(f"{self.name:<10} - checking hardlinks")
                     tagged = self.disk_noHL()
                 if commands.get('clean_orphaned'):
-                    logger.info('%-10s - moving orphan files', self.name)
+                    logger.info(f"{self.name:<10} - moving orphan files")
                     self.disk_clean_orphans()
 
                 if commands.get('prune_orphaned'):
-                    logger.info('%-10s - pruning old orphans', self.name)
+                    logger.info(f"{self.name:<10} - pruning old orphans")
                     self.disk_prune_old()
             except Exception as e:
                 logger.error(f"Error: {e}\n{traceback.format_exc()}")
@@ -721,7 +718,7 @@ def main():
             instance = TagWorker(qbit, qb)
         except Exception as e:
             logger.critical(f"{qb['name']:<10} - {e} {str(e)}")
-    # lets fucking go
+        # engage!
         try:
             threads.extend(instance.run())
         except Exception as e:
@@ -742,8 +739,9 @@ def main():
                 logger.error(f"%-10s - Unable to stop instance", instance.name)
 
     for t in threads:
+        # comprobamos el tipo. si la instancia falló al loguear qbit, sus threads no existen y son None
         if isinstance(t, threading.Thread):
-            t.join() # comprobamos el tipo. si la instancia falló al loguear qbit, sus threads no existen y son None
+            t.join()
 
 if __name__ == "__main__":
     # os.system("cls" if os.name == "nt" else "clear")
