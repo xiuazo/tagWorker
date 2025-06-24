@@ -546,57 +546,54 @@ class TagWorker:
 
         if not torrents:
             return False
-        # logger.info(f'%s - {len(torrents)} must be tagged.', self.name)
 
         tracker_details = config.tracker_details
         default_tag = tracker_details['default']['tag'] # FIXME: se da por hecho que existe en la config. puede romper
 
-        changes = False
-        actions = {}
-        no_default = set()
+        addtag = defaultdict(set)
+        deltag = defaultdict(set)
+
         for thash, torrent in torrents.items():
             torrent_tracker = torrent.get('tracker', None)
-            if not torrent_tracker: continue # torrents with 'issues'?
-            remove = []
-            result = default_tag
+            if not torrent_tracker: continue
+            good_tags, bad_tags = set(), set()
 
-            torrent_tags = torrent.get('tags').split(", ")
+            torrent_tags = {tag.strip() for tag in torrent.get('tags', '').split(",")}
 
             for expr, value in tracker_details.items():
-                tracker_tag = value['tag']
-                if tracker_tag == default_tag: continue # ?????
-                elif any(word in torrent_tracker for word in expr.split("|")):
-                    result = tracker_tag
+                if expr == 'default': continue
+                tracker_tags = {tag.strip() for tag in value.get('tag', '').split(",")}
+                words = {word.strip() for word in expr.split("|")}
+                if any(word in torrent_tracker for word in words):
+                    good_tags = tracker_tags
+                    missing_tags = tracker_tags - torrent_tags
+                    for tag in missing_tags:
+                        addtag[tag].add(thash)
                     # era default y tenemos que quitarle el tag pq ya no lo es
                     if default_tag in torrent_tags:
-                        # remove.append(tracker_tag)
-                        no_default.add(thash)
-                        pass
-                # en caso que lo lleve y no deba se los quitaremos
-                elif tracker_tag in torrent_tags:
-                    remove.append(tracker_tag)
-
-            if len(remove):
-                client.remove_tags(thash, remove)
-                changes = True
-
-            # si ya tenia el tag no lo tocaremos
-            if result not in torrent.get('tags','').split(", "):
-                if result in actions.keys():
-                    actions[result].append(thash)
+                        deltag[default_tag].add(thash)
+                    # no break para poder eliminar tags de otros trackers
+                # en caso que lleve alguno y no deba se los quitaremos
+                # la eliminacion no es directa: varios trackers pueden compartir tag y asi se lo quitariamos
+                # else:
+                #     intersect = (tracker_tags & torrent_tags)
+                #     for tag in intersect:
+                #         deltag[tag].add(thash)
                 else:
-                    actions[result] = [thash]
+                    bad_tags.update(tracker_tags & torrent_tags)
+            bad_tags -= good_tags
+            for tag in bad_tags:
+                deltag[tag].add(thash)
 
-        if no_default:
-            client.remove_tags(no_default, default_tag)
-            changes = True
-
-        for value, hashes in actions.items():
-            logger.info(f'%-10s - tagging {len(hashes)} with {value}', self.name)
+        for value, hashes in addtag.items():
+            logger.info(f"{self.name:<10} - tagging {len(hashes)} torrents {value}")
             client.add_tags(hashes, value)
-            changes = True
 
-        return changes
+        for value, hashes in deltag.items():
+            logger.info(f"{self.name:<10} - untagging {len(hashes)} torrents {value}")
+            client.remove_tags(hashes, value)
+
+        return bool(addtag or deltag)
 
     def tag_SL(self):
         torrents = self.torrents_changed({'category', 'max_seeding_time', 'up_limit', 'tags'})
