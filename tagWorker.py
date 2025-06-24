@@ -344,12 +344,13 @@ class TagWorker:
         if not torrents:
             return False
 
-        errored = []
-        unerrored = []
+        errored, unerrored = set(), set()
+        errortag = TagWorker.appconfig.issue_tag
         for thash, tval in torrents.items():
             if tval.get('state','') in ['pausedUP','pausedDL', 'error', 'unknown']: # filtramos solos los que estan normal XD
             # if tval.get('state','') in ['error', 'unknown']: # filtramos solos los que estan normal
                 continue
+            ttags = tval.get('tags', "").split(", ")
             response = self.client.get_trackers(thash)
             working = False
             for tracker in response:
@@ -357,18 +358,19 @@ class TagWorker:
                     working = True
                     break
             if not working:
-                errored.append(thash)
+                if errortag not in ttags:
+                    errored.add(thash)
                 logger.debug(f'%-10s - errored torrent: {tval["name"]}', self.name)
-            elif TagWorker.appconfig.issue_tag in tval.get('tags').split(", "):
+            elif errortag in ttags:
                 logger.debug(f'%-10s - unerrored torrent: {tval["name"]}', self.name)
-                unerrored.append(thash)
+                unerrored.add(thash)
 
         if errored:
-            self.client.add_tags(errored, TagWorker.appconfig.issue_tag)
+            self.client.add_tags(errored, errortag)
             logger.info(f'%-10s - {len(errored)} torrents with tracker issues', self.name)
 
         if unerrored:
-            self.client.remove_tags(unerrored, TagWorker.appconfig.issue_tag)
+            self.client.remove_tags(unerrored, errortag)
             logger.info(f'%-10s - {len(unerrored)} torrents fixed', self.name)
 
         return bool(errored or unerrored)
