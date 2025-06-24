@@ -72,6 +72,7 @@ class TagWorker:
 
     def task_tag(self):
         commands = self.commands
+        sl_torrent_queue = set()
 
         while not self.stop_event.is_set():
             wait_for_event("disk_done", self.disk_idle, self.name)
@@ -113,10 +114,12 @@ class TagWorker:
                     if changes: logger.debug(f"{self.name:<10} - {key} made changes.")
                     tags_changed |= changes
 
+            sl_torrent_queue |= set(self.torrents_changed({'category', 'max_seeding_time', 'up_limit', 'tags'}).keys())
+
             if not tags_changed:
                 # cuando los tags están en orden es cuando ajustamos SL
-                # FIXME: si loopea, el siguiente sync ofrece un torrentset nuevo, el antiguo no veria sus SL ajustados
-                if commands.get('share_limits', False): self.tag_SL()
+                if commands.get('share_limits', False): self.tag_SL(sl_torrent_queue)
+                sl_torrent_queue.clear()
                 # logger.debug(f"{self.name:<10} - sleeping {parse(TagWorker.appconfig.tagging_schedule_interval)}s...")
                 self.tag_idle.set()
                 self.tag_trigger.wait(timeout=parse(TagWorker.appconfig.tagging_schedule_interval))
@@ -602,24 +605,26 @@ class TagWorker:
 
         return bool(addtag or deltag)
 
-    def tag_SL(self):
-        torrents = self.torrents_changed({'category', 'max_seeding_time', 'up_limit', 'tags'})
+    def tag_SL(self, torrentset):
+        if not torrentset: return
         client = self.client
 
-        if not torrents:
-            return False
-
-        logger.info(f"{self.name:<10} - analyzing {len(torrents)} torrents sharelimits")
+        logger.info(f"{self.name:<10} - analyzing {len(torrentset)} torrents sharelimits")
 
         profiles = self.share_limits
         tagprefix = TagWorker.appconfig.share_limits_tag_prefix
-        torrent_profiles_dict = {}
+        torrent_profiles_dict = dict()
 
         # lo inicializo con todos los nombres para que hayan items o no, se recorra para tagueo Y DESTAGUEO
         for profile_name, profile_config in profiles.items():
             torrent_profiles_dict[profile_name] = set()
 
+        torrents = {thash : self.client.status.get('torrents', {}).get(thash) for thash in torrentset}
+
         for thash, tval in torrents.items():
+            if not tval:
+                logger.warning(f"{self.name:<10} - skipping hash {thash}. ")
+                continue
             tags = tval.get('tags',{}).split(", ")
             # find matching profile
             for profile_name, profile_config in profiles.items():
@@ -643,10 +648,10 @@ class TagWorker:
             # tag
             if profiles[group_name].get('add_group_to_tag', True):
                 # no lo tiene y lo merece
-                addtag = {h for h in hashes if tagname not in torrents[h].get('tags', {}).split(", ")}
+                addtag = {h for h in hashes if tagname not in torrents[h].get('tags').split(", ")}
                 if addtag: client.add_tags(addtag, tagname)
             # lo tiene y no lo merece
-            deltag = {h for h, t in torrents.items() if h not in hashes and tagname in t.get('tags', {}).split(", ")}
+            deltag = {h for h in torrentset if h not in hashes and tagname in torrents[h].get('tags').split(", ")}
             if deltag: client.remove_tags(deltag, tagname)
             if addtag or deltag: changes += len(addtag) + len(deltag)
 
