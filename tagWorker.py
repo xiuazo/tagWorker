@@ -605,7 +605,7 @@ class TagWorker:
         if not torrents:
             return False
 
-        logger.info(f'%-10s - analyzing {len(torrents)} torrents sharelimits', self.name)
+        logger.info(f"{self.name:<10} - analyzing {len(torrents)} torrents sharelimits")
 
         profiles = self.share_limits
         tagprefix = TagWorker.appconfig.share_limits_tag_prefix
@@ -616,28 +616,20 @@ class TagWorker:
             torrent_profiles_dict[profile_name] = set()
 
         for thash, tval in torrents.items():
+            tags = tval.get('tags',{}).split(", ")
             # find matching profile
             for profile_name, profile_config in profiles.items():
-                tags = tval.get('tags',[]).split(", ")
-                if 'category' in profile_config and not any(cat == tval['category'] for cat in profile_config['category']):
-                    continue
-                # validate all tags
-                if 'include_all_tags' in profile_config and not all(tag in tags for tag in profile_config['include_all_tags']):
-                    continue
-                # validate any tags
-                if 'include_any_tags' in profile_config and not any(tag in tags for tag in profile_config['include_any_tags']):
-                    continue
-                # validate exclude all tags
-                if 'exclude_all_tags' in profile_config and all(tag in tags for tag in profile_config['exclude_all_tags']):
-                    continue
-                # validate exclude any tags
-                if 'exclude_any_tags' in profile_config and any(tag in tags for tag in profile_config['exclude_any_tags']):
+                if (
+                    ('category' in profile_config and not any(cat == tval['category'] for cat in profile_config['category']))
+                    or ('include_all_tags' in profile_config and not all(tag in tags for tag in profile_config['include_all_tags']))
+                    or ('include_any_tags' in profile_config and not any(tag in tags for tag in profile_config['include_any_tags']))
+                    or ('exclude_all_tags' in profile_config and all(tag in tags for tag in profile_config['exclude_all_tags']))
+                    or ('exclude_any_tags' in profile_config and any(tag in tags for tag in profile_config['exclude_any_tags']))
+                ):
                     continue
 
-                # llegados a este punto, el torrent califica para ser asignado al perfil.
                 torrent_profiles_dict[profile_name].add(thash)
-
-                break # torrent classified, go next one
+                break
 
         addtag, deltag = set(), set()
         changes = 0
@@ -669,7 +661,7 @@ class TagWorker:
             logger.debug(f"{self.name:<10} - {len(hashes)} torrents {tagname}. (tagged {len(addtag)}/untagged {len(deltag)})")
             client.sharelimit(hashes, limits)
             client.uploadlimit(hashes, p_uplimit)
-        logger.info(f"{self.name:<10} - {changes} torrents have been adjusted")
+        logger.info(f"{self.name:<10} - {changes} torrent sharelimits adjusted")
         return changes
 
 # ============================================
