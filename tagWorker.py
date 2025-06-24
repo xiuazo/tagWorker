@@ -1,8 +1,35 @@
+def print_banner(version="0.0.1"):
+    banner_width = 80
+    banner = fr"""
+   __             _       __           __
+  / /_____ _____ | |     / /___  _____/ /_____  _____
+ / __/ __ `/ __ `/ | /| / / __ \/ ___/ //_/ _ \/ ___/
+/ /_/ /_/ / /_/ /| |/ |/ / /_/ / /  / ,< /  __/ /
+\__/\__,_/\__, / |__/|__/\____/_/  /_/|_|\___/_/
+         /____/
+
+ Version:        : {version}
+ License         : GNU General Public License v3.0
+                   https://www.gnu.org/licenses/gpl-3.0.html
+ Copyright       : (C) 2025 xiu – This is free software.
+                   You may modify and redistribute it under the same license.
+"""
+    underline = "-" * banner_width
+
+    print()
+    print(underline)
+    print(banner)
+    print(underline)
+    print()
+
+print_banner()
+
 import os
 import time
 import threading
 import uuid
 import traceback
+import platform
 from collections import defaultdict
 
 from datetime import timedelta
@@ -706,8 +733,25 @@ def wait_for_event(name, wait_event, logger_prefix):
 
 # ===========================================
 
+def startup_msg(config=None):
+    print('')
+    logger.info(f"Platform        : {platform.system()} {platform.release()}")
+    logger.info(f"Python          : {platform.python_version()}")
+    logger.info(f"qBit clients    : {len(config.qb_instances)}")
+
+    if config:
+        tracker_HR_rules = len(config.trackers_HR_rules)
+        logger.info(f"FullSync every  : {getattr(config, 'fullsync_interval', 'N/A')}")
+        logger.info(f"Refresh interval: {getattr(config, 'tagging_schedule_interval', 'N/A')}")
+        logger.info(f"Disk Schedule   : {getattr(config, 'disktasks_schedule_interval', 'N/A')}")
+        logger.info(f"Scan Dupes      : {getattr(config, 'scan_dupes', 'N/A')}")
+        logger.info(f"Trackers        : {tracker_HR_rules}")
+    print('')
+
+
 def main():
     config = Config()
+    startup_msg(config=config)
     TagWorker.appconfig = config
     threads = []
     # inits
