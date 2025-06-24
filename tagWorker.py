@@ -548,7 +548,11 @@ class TagWorker:
             return False
 
         tracker_details = config.tracker_details
-        default_tag = tracker_details['default']['tag'] # FIXME: se da por hecho que existe en la config. puede romper
+        try:
+            default_tag = tracker_details['default']['tag']
+        except KeyError:
+            logger.warning(f"{self.name:<10} - tracker_details['default']['tag'] no está definido")
+            default_tag = None
 
         addtag = defaultdict(set)
         deltag = defaultdict(set)
@@ -570,7 +574,7 @@ class TagWorker:
                     for tag in missing_tags:
                         addtag[tag].add(thash)
                     # era default y tenemos que quitarle el tag pq ya no lo es
-                    if default_tag in torrent_tags:
+                    if default_tag and default_tag in torrent_tags:
                         deltag[default_tag].add(thash)
                     # no break para poder eliminar tags de otros trackers
                 # en caso que lleve alguno y no deba se los quitaremos
