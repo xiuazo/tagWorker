@@ -27,5 +27,3 @@ file_handler.setFormatter(logging.Formatter(log_format, datefmt=date_format))
 
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)
-
-logger.info("%-10s - Logger init", "GLOBAL")

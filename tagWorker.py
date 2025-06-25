@@ -1,37 +1,12 @@
-def print_banner(version="0.0.1"):
-    banner_width = 80
-    banner = fr"""
-   __             _       __           __
-  / /_____ _____ | |     / /___  _____/ /_____  _____
- / __/ __ `/ __ `/ | /| / / __ \/ ___/ //_/ _ \/ ___/
-/ /_/ /_/ / /_/ /| |/ |/ / /_/ / /  / ,< /  __/ /
-\__/\__,_/\__, / |__/|__/\____/_/  /_/|_|\___/_/
-         /____/
-
- Version:        : {version}
- License         : GNU General Public License v3.0
-                   https://www.gnu.org/licenses/gpl-3.0.html
- Copyright       : (C) 2025 xiu – This is free software.
-                   You may modify and redistribute it under the same license.
-"""
-    underline = "-" * banner_width
-
-    print()
-    print(underline)
-    print(banner)
-    print(underline)
-    print()
-
-print_banner()
-
+import sys
 import os
 import time
 import threading
 import uuid
 import traceback
 import platform
-from collections import defaultdict
 
+from collections import defaultdict
 from datetime import timedelta
 from pytimeparse2 import parse
 from urllib.parse import urlparse
@@ -40,6 +15,43 @@ from modules.config import Config
 from modules.logger import logger
 from modules.qbit import qBit
 from modules.files import move_to_dir, is_file, build_inode_map, verificar_hardlinks, translate_path
+
+def print_banner(version="0.0.1"):
+    # ANSI codes
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    FG_WHITE = "\033[37m"
+    FG_YELLOW = "\033[33m"
+    FG_CYAN = "\033[36m"
+    FG_GREEN = "\033[32m"
+    # Disable if not interactive terminal
+    if not sys.stdout.isatty():
+        RESET = BOLD = DIM = FG_WHITE = FG_YELLOW = FG_CYAN = FG_GREEN = ""
+
+    banner = fr"""
+   __             _       __           __
+  / /_____ _____ | |     / /___  _____/ /_____  _____
+ / __/ __ `/ __ `/ | /| / / __ \/ ___/ //_/ _ \/ ___/
+/ /_/ /_/ / /_/ /| |/ |/ / /_/ / /  / ,< /  __/ /
+\__/\__,_/\__, / |__/|__/\____/_/  /_/|_|\___/_/
+         /____/
+
+"""
+
+    print(f"{FG_CYAN}{banner}{RESET}")
+    print("-" * 72)
+    print(f"{BOLD}Version         : {FG_GREEN}{version}{RESET}")
+    print(f"{BOLD}License         : {FG_YELLOW}GNU General Public License v3.0{RESET}")
+    print(f"{BOLD}                  {DIM}https://www.gnu.org/licenses/gpl-3.0.html{RESET}")
+    print(f"{BOLD}Copyright       : {FG_CYAN}(C) 2025 xiu{RESET}")
+    print(f"{BOLD}                  {FG_CYAN}https://github.com/xiuazo/tagWorker{RESET}")
+    print(f"{BOLD}                  {FG_WHITE}This is free software. You may modify and")
+    print(f"{BOLD}                  {FG_WHITE}redistribute it under the same license.{RESET}")
+    print("-" * 72)
+
+print_banner()
+
 
 # =========================================================================
 
@@ -768,6 +780,7 @@ def startup_msg(config=None):
 
 
 def main():
+    logger.info("%-10s - Logger init", "GLOBAL")
     config = Config()
     startup_msg(config=config)
     TagWorker.appconfig = config
