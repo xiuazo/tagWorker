@@ -640,13 +640,14 @@ class TagWorker:
 
         profiles = self.share_limits
         tagprefix = TagWorker.appconfig.share_limits_tag_prefix
-        torrent_profiles_dict = dict()
+        profiles_dict = dict()
 
         # lo inicializo con todos los nombres para que hayan items o no, se recorra para tagueo Y DESTAGUEO
         for profile_name, profile_config in profiles.items():
-            torrent_profiles_dict[profile_name] = set()
+            profiles_dict[profile_name] = set()
 
         torrents = {thash : self.client.status.get('torrents', {}).get(thash) for thash in torrentset}
+        tagdict = defaultdict(set)
 
         for thash, tval in torrents.items():
             if not tval:
@@ -664,26 +665,30 @@ class TagWorker:
                 ):
                     continue
 
-                torrent_profiles_dict[profile_name].add(thash)
+                tagname = profile_config.get('custom_tag', tagprefix + profile_name)
+                if profile_config.get('add_group_to_tag', True):
+                    tagdict[tagname].add(thash)
+                else:
+                    tagdict[tagname] = set()
+                profiles_dict[profile_name].add(thash)
                 break
 
-        # addtag, deltag = set(), set()
         addtag = defaultdict(set)
         deltag = defaultdict(set)
-        changes = 0
-        # apply limits to dict
-        for group_name, hashes in torrent_profiles_dict.items():
+        for sltag, hashes in tagdict.items():
+            for thash in hashes:
+                torrenttags = set(torrents[thash].get('tags', '').split(", "))
+                if sltag not in torrenttags:
+                    addtag[sltag].add(thash)
+        for thash, tval in torrents.items():
+            sltags = set(torrents[thash].get('tags', '').split(", ")) & set(tagdict.keys()) # tags relativos a sharelimits
+            for sltag in sltags:
+                if thash not in tagdict[sltag]:
+                    deltag[sltag].add(thash)
+
+
+        for group_name, hashes in profiles_dict.items():
             tagname = profiles[group_name].get('custom_tag', tagprefix + group_name)
-            # tag
-            if profiles[group_name].get('add_group_to_tag', True):
-                # los que lo merecen y no lo tienen
-                addtag[tagname] = {h for h in hashes if tagname not in torrents[h].get('tags').split(", ")}
-            # fix issue https://github.com/xiuazo/tagWorker/issues/2
-            else:
-                deltag[tagname] = {h for h in hashes if tagname in torrents[h].get('tags').split(", ")}
-            # los que lo tienen y no lo merecen
-            deltag[tagname] |= {h for h in torrentset if h not in hashes and tagname in torrents[h].get('tags').split(", ")}
-            changes += len(addtag.get(tagname, {})) + len(deltag.get(tagname, {}))
 
             # ratio and limit
             p_maxratio = profiles[group_name].get('max_ratio', -2)
@@ -697,13 +702,18 @@ class TagWorker:
                     'ratio': p_maxratio,
                     'time':p_maxtime
                 }
-            logger.debug(f"{self.name:<10} - {len(hashes)} torrents {tagname}") #. (tagged {len(addtag)}/untagged {len(deltag)})")
+            logger.debug(f"{self.name:<10} - {len(hashes)} torrents {tagname}")
             client.sharelimit(hashes, limits)
             client.uploadlimit(hashes, p_uplimit)
-        for tag, hashes in addtag.items():
-            client.add_tags(hashes, tag)
-        for tag, hashes in deltag.items():
-            client.remove_tags(hashes, tag)
+
+        changes = 0
+        for sltag, hashes in addtag.items():
+            client.add_tags(hashes, sltag)
+            changes += len(hashes)
+        for sltag, hashes in deltag.items():
+            client.remove_tags(hashes, sltag)
+            changes += len(hashes)
+
         logger.info(f"{self.name:<10} - {changes} torrent sharelimits adjusted")
 
         return changes
