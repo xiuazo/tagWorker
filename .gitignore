@@ -2,6 +2,7 @@ start.sh
 config.yml
 
 logs/
+.vscode/
 
 scripts/*
 !scripts/xseedTags.py

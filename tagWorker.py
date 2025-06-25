@@ -182,14 +182,14 @@ class TagWorker:
                 logger.info(f"{self.name:<10} - disk task started")
 
                 if commands.get('tag_noHL'):
-                    logger.info(f"{self.name:<10} - checking hardlinks")
+                    # logger.info(f"{self.name:<10} - checking hardlinks")
                     tagged = self.disk_noHL()
                 if commands.get('clean_orphaned'):
-                    logger.info(f"{self.name:<10} - moving orphan files")
+                    # logger.info(f"{self.name:<10} - moving orphan files")
                     self.disk_clean_orphans()
 
                 if commands.get('prune_orphaned'):
-                    logger.info(f"{self.name:<10} - pruning old orphans")
+                    # logger.info(f"{self.name:<10} - pruning old orphans")
                     self.disk_prune_old()
             except Exception as e:
                 logger.error(f"Error: {e}\n{traceback.format_exc()}")
@@ -310,14 +310,16 @@ class TagWorker:
             if not resultado:
                 noHLs.add(thash)
                 if not tagged:
+                    logger.info(f"{self.name:<10} - new noHL: {torrent.get('name')}")
                     addtag.add(thash)
             elif tagged:
+                logger.info(f"{self.name:<10} - {torrent.get('name')} has links now.")
                 deltag.add(thash)
 
         if addtag: self.client.add_tags(addtag, noHL_tag)
         if deltag: self.client.remove_tags(deltag, noHL_tag)
 
-        logger.info(f"{self.name:<10} - Found {len(noHLs)} noHL. Tagged {len(addtag)} - Untagged {len(deltag)}")
+        logger.info(f"{self.name:<10} - {len(noHLs)} noHL. New {len(addtag)} - Untagged {len(deltag)}")
         return bool(addtag or deltag)
 
     def tag_lowseeds(self):
@@ -648,18 +650,20 @@ class TagWorker:
         if not torrentset: return
         client = self.client
 
-        logger.info(f"{self.name:<10} - analyzing {len(torrentset)} torrents sharelimits")
+        logger.info(f"{self.name:<10} - setting {len(torrentset)} sharelimits")
 
         profiles = self.share_limits
         tagprefix = TagWorker.appconfig.share_limits_tag_prefix
         profiles_dict = dict()
+        tagdict = dict()
 
-        # lo inicializo con todos los nombres para que hayan items o no, se recorra para tagueo Y DESTAGUEO
+        # lo inicializo con todos los nombres para que hayan items o no, se recorra para tag Y UNTAG
         for profile_name, profile_config in profiles.items():
+            tagname = profile_config.get('custom_tag', tagprefix + profile_name)
             profiles_dict[profile_name] = set()
+            tagdict[tagname] = set()
 
         torrents = {thash : self.client.status.get('torrents', {}).get(thash) for thash in torrentset}
-        tagdict = defaultdict(set)
 
         for thash, tval in torrents.items():
             if not tval:
@@ -680,8 +684,6 @@ class TagWorker:
                 tagname = profile_config.get('custom_tag', tagprefix + profile_name)
                 if profile_config.get('add_group_to_tag', True):
                     tagdict[tagname].add(thash)
-                else:
-                    tagdict[tagname] = set()
                 profiles_dict[profile_name].add(thash)
                 break
 
@@ -689,15 +691,17 @@ class TagWorker:
         deltag = defaultdict(set)
         for sltag, hashes in tagdict.items():
             for thash in hashes:
-                torrenttags = set(torrents[thash].get('tags', '').split(", "))
+                torrent = torrents[thash]
+                torrenttags = set(torrent.get('tags', '').split(", "))
                 if sltag not in torrenttags:
+                    logger.debug(f"{self.name:<10} - adding tag {sltag} to {torrent.get('name')}")
                     addtag[sltag].add(thash)
-        for thash, tval in torrents.items():
-            sltags = set(torrents[thash].get('tags', '').split(", ")) & set(tagdict.keys()) # tags relativos a sharelimits
+        for thash, torrent in torrents.items():
+            sltags = set(torrent.get('tags', '').split(", ")) & set(tagdict.keys()) # tags relativos a sharelimits
             for sltag in sltags:
                 if thash not in tagdict[sltag]:
+                    logger.debug(f"{self.name:<10} - removing tag {sltag} from {torrent.get('name')}")
                     deltag[sltag].add(thash)
-
 
         for group_name, hashes in profiles_dict.items():
             tagname = profiles[group_name].get('custom_tag', tagprefix + group_name)
@@ -714,7 +718,7 @@ class TagWorker:
                     'ratio': p_maxratio,
                     'time':p_maxtime
                 }
-            logger.debug(f"{self.name:<10} - {len(hashes)} torrents {tagname}")
+            if len(hashes): logger.debug(f"{self.name:<10} - {len(hashes)} torrents {tagname}")
             client.sharelimit(hashes, limits)
             client.uploadlimit(hashes, p_uplimit)
 
@@ -726,7 +730,7 @@ class TagWorker:
             client.remove_tags(hashes, sltag)
             changes += len(hashes)
 
-        logger.info(f"{self.name:<10} - {changes} torrent sharelimits adjusted")
+        logger.info(f"{self.name:<10} - {changes} new sharelimits set")
 
         return changes
 
