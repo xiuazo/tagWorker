@@ -605,33 +605,34 @@ class TagWorker:
         deltag = defaultdict(set)
 
         for thash, torrent in torrents.items():
-            torrent_tracker = torrent.get('tracker', None)
+            torrent_tracker = torrent.get('tracker')
             if not torrent_tracker: continue
             good_tags, bad_tags = set(), set()
+            torrent_tags = set(torrent.get('tags', '').split(", "))
 
-            torrent_tags = {tag.strip() for tag in torrent.get('tags', '').split(",")}
-
+            torrent_classified = False
             for expr, value in tracker_details.items():
                 if expr == 'default': continue
-                tracker_tags = {tag.strip() for tag in value.get('tag', '').split(",")}
+                tracker_tags = set(value.get('tag', '').split(", "))
                 words = {word.strip() for word in expr.split("|")}
                 if any(word in torrent_tracker for word in words):
-                    good_tags = tracker_tags
+                    torrent_classified = True
+                    # es un poco tonteria el |=. un torrent solo deberia matchear con una definicion
+                    # pero... tampoco causaria problemas si lo hiciese con varias
+                    good_tags |= tracker_tags
                     missing_tags = tracker_tags - torrent_tags
                     for tag in missing_tags:
                         addtag[tag].add(thash)
                     # era default y tenemos que quitarle el tag pq ya no lo es
                     if default_tag and default_tag in torrent_tags:
                         deltag[default_tag].add(thash)
-                    # no break para poder eliminar tags de otros trackers
-                # en caso que lleve alguno y no deba se los quitaremos
-                # la eliminacion no es directa: varios trackers pueden compartir tag y asi se lo quitariamos
-                # else:
-                #     intersect = (tracker_tags & torrent_tags)
-                #     for tag in intersect:
-                #         deltag[tag].add(thash)
+                    # no break para poder eliminar tags de otras definiciones
                 else:
                     bad_tags.update(tracker_tags & torrent_tags)
+            # si llegamos a este punto sin tracker_tags, es que no coincide con ninguna descripcion de tracker -> deberia ser el default
+            # aun asi, lo hacemos con torrent_classified por legibilidad
+            if not torrent_classified and default_tag and default_tag not in torrent_tags:
+                addtag[default_tag].add(thash)
             bad_tags -= good_tags
             for tag in bad_tags:
                 deltag[tag].add(thash)
