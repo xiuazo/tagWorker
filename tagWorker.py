@@ -640,20 +640,23 @@ class TagWorker:
                 torrent_profiles_dict[profile_name].add(thash)
                 break
 
-        addtag, deltag = set(), set()
+        # addtag, deltag = set(), set()
+        addtag = defaultdict(set)
+        deltag = defaultdict(set)
         changes = 0
         # apply limits to dict
         for group_name, hashes in torrent_profiles_dict.items():
             tagname = profiles[group_name].get('custom_tag', tagprefix + group_name)
             # tag
             if profiles[group_name].get('add_group_to_tag', True):
-                # no lo tiene y lo merece
-                addtag = {h for h in hashes if tagname not in torrents[h].get('tags').split(", ")}
-                if addtag: client.add_tags(addtag, tagname)
-            # lo tiene y no lo merece
-            deltag = {h for h in torrentset if h not in hashes and tagname in torrents[h].get('tags').split(", ")}
-            if deltag: client.remove_tags(deltag, tagname)
-            if addtag or deltag: changes += len(addtag) + len(deltag)
+                # los que lo merecen y no lo tienen
+                addtag[tagname] = {h for h in hashes if tagname not in torrents[h].get('tags').split(", ")}
+            # fix issue https://github.com/xiuazo/tagWorker/issues/2
+            else:
+                deltag[tagname] = {h for h in hashes if tagname in torrents[h].get('tags').split(", ")}
+            # los que lo tienen y no lo merecen
+            deltag[tagname] |= {h for h in torrentset if h not in hashes and tagname in torrents[h].get('tags').split(", ")}
+            changes += len(addtag.get(tagname, {})) + len(deltag.get(tagname, {}))
 
             # ratio and limit
             p_maxratio = profiles[group_name].get('max_ratio', -2)
@@ -667,10 +670,15 @@ class TagWorker:
                     'ratio': p_maxratio,
                     'time':p_maxtime
                 }
-            logger.debug(f"{self.name:<10} - {len(hashes)} torrents {tagname}. (tagged {len(addtag)}/untagged {len(deltag)})")
+            logger.debug(f"{self.name:<10} - {len(hashes)} torrents {tagname}") #. (tagged {len(addtag)}/untagged {len(deltag)})")
             client.sharelimit(hashes, limits)
             client.uploadlimit(hashes, p_uplimit)
+        for tag, hashes in addtag.items():
+            client.add_tags(hashes, tag)
+        for tag, hashes in deltag.items():
+            client.remove_tags(hashes, tag)
         logger.info(f"{self.name:<10} - {changes} torrent sharelimits adjusted")
+
         return changes
 
 # ============================================
