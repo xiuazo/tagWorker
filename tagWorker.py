@@ -153,6 +153,8 @@ class TagWorker:
                     if changes: logger.debug(f"{self.name:<10} - {key} made changes.")
                     tags_changed |= changes
 
+            tags_changed |= self.clean_noHL()
+
             sl_torrent_queue |= set(self.torrents_changed({'category', 'max_seeding_time', 'up_limit', 'tags'}).keys())
 
             if not tags_changed:
@@ -289,9 +291,6 @@ class TagWorker:
         for thash, torrent in torrents.items():
             tagged = noHL_tag in torrent['tags'].split(", ")
             if torrent['category'] not in TagWorker.appconfig.noHL_categories:
-                if tagged:
-                    logger.info(f"{self.name:<10} - Untagged {torrent.get('name')}: belongs to a noscan-HLs category.")
-                    deltag.add(thash)
                 continue
 
             file = torrent['content_path']
@@ -324,6 +323,31 @@ class TagWorker:
 
         logger.info(f"{self.name:<10} - {len(noHLs)} noHL. New {len(addtag)} - Untagged {len(deltag)}")
         return bool(addtag or deltag)
+
+    def clean_noHL(self):
+        """
+        Si la instancia no es local no hace nada -> no limpia pq podria haber otro gestor
+        Elimina los tags de noHL cuando:
+         - un torrent pertenece a una categoria fuera del scan
+         - noHL está deshabilitado
+        """
+        if not self.localinstance:
+            return False
+        noHL_tag = TagWorker.appconfig.noHL_tag
+        torrents = self.torrents_changed({'category', 'tags'})
+        torrents = {th: tval for th, tval in torrents.items() if noHL_tag in tval['tags'].split(", ")} # filter torrents by noHL tag
+        if not self.commands.get('tag_noHL'):
+            hashes = torrents.keys()
+            if hashes: logger.info(f"{self.name:<10} - Untagged {noHL_tag} {len(torrents)} torrents: tag_noHL command disabled")
+        else:
+            hashes = set()
+            for thash, torrent in torrents.items():
+                if torrent.get('category') not in TagWorker.appconfig.noHL_categories:
+                    logger.info(f"{self.name:<10} - Untagged {noHL_tag} {torrent.get('name')}: disabled category")
+                    hashes.add(thash)
+        if hashes:
+            self.client.remove_tags(hashes, noHL_tag)
+        return bool(hashes)
 
     def tag_lowseeds(self):
         torrents = self.torrents_changed({'num_seeds', 'tags', 'tracker', 'state'})
