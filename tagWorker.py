@@ -392,10 +392,11 @@ class TagWorker:
         errored, unerrored = set(), set()
         errortag = TagWorker.appconfig.issue_tag
         for thash, tval in torrents.items():
-            if tval.get('state','') in ['pausedUP','pausedDL', 'error', 'unknown']: # filtramos solos los que estan normal XD
-            # if tval.get('state','') in ['error', 'unknown']: # filtramos solos los que estan normal
+            ttags = tval.get('tags').split(", ")
+            if tval.get('state') in ['pausedUP','pausedDL', 'error', 'unknown']:
+                if errortag in ttags:
+                    unerrored.add(thash)
                 continue
-            ttags = tval.get('tags', "").split(", ")
             response = self.client.get_trackers(thash)
             working = False
             for tracker in response:
