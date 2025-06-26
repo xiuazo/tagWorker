@@ -5,11 +5,11 @@ import threading
 import uuid
 import traceback
 import platform
+import tldextract
 
 from collections import defaultdict
 from datetime import timedelta
 from pytimeparse2 import parse
-from urllib.parse import urlparse
 
 from modules.config import Config
 from modules.logger import logger
@@ -69,7 +69,7 @@ class TagWorker:
         self.folders = config.get('folders')
         self.translation_table = config.get('translation_table',[])
         self.share_limits = config['share_limits']
-        self.name = config.get('name', urlparse(config['url']).hostname)
+        self.name = config.get('name', tldextract.extract(config['url']).domain)
         self.changes_dict = {}
         self.dryrun = config.get("dryrun", True)
         self.localinstance = config.get("local_instance", False)
@@ -391,33 +391,35 @@ class TagWorker:
 
         errored, unerrored = set(), set()
         errortag = TagWorker.appconfig.issue_tag
-        for thash, tval in torrents.items():
-            ttags = tval.get('tags').split(", ")
-            if tval.get('state') in ['pausedUP','pausedDL', 'error', 'unknown']:
+        for thash, torrent in torrents.items():
+            ttags = torrent.get('tags').split(", ")
+            if torrent.get('state') in ['pausedUP','pausedDL', 'error', 'unknown']:
                 if errortag in ttags:
                     unerrored.add(thash)
                 continue
             response = self.client.get_trackers(thash)
             working = False
+            errormsg = ""
             for tracker in response:
-                if tracker.get('status') in [1,2,3]:
+                if tracker.get('status') not in {0,4}:
                     working = True
                     break
+                else: errormsg = tracker.get('msg')
             if not working:
                 if errortag not in ttags:
                     errored.add(thash)
-                logger.debug(f'%-10s - errored torrent: {tval["name"]}', self.name)
+                logger.debug(f"{self.name:<10} - errored {tldextract.extract(torrent['tracker']).domain}: {torrent['name']} {'(' + errormsg + ')' if errormsg else ''}")
             elif errortag in ttags:
-                logger.debug(f'%-10s - unerrored torrent: {tval["name"]}', self.name)
+                logger.debug(f"{self.name:<10} - fixed {tldextract.extract(torrent['tracker']).domain}: {torrent['name']} ")
                 unerrored.add(thash)
 
         if errored:
             self.client.add_tags(errored, errortag)
-            logger.info(f'%-10s - {len(errored)} torrents with tracker issues', self.name)
+            logger.info(f"{self.name:<10} - {len(errored)} torrents with tracker issues")
 
         if unerrored:
             self.client.remove_tags(unerrored, errortag)
-            logger.info(f'%-10s - {len(unerrored)} torrents fixed', self.name)
+            logger.info(f"{self.name:<10} - {len(unerrored)} torrents fixed")
 
         return bool(errored or unerrored)
 

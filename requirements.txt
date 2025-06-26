@@ -1,6 +1,4 @@
 pytimeparse2
 requests
 pyyaml
-dotenv
-qbittorrent-api
-bencode
+tldextract
