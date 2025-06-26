@@ -282,11 +282,16 @@ class TagWorker:
         torrents = self.client.status.get('torrents', {})
         translation_table = self.translation_table
 
+        if torrents:
+            inodo_mapa = build_inode_map(raiz)
         noHLs, addtag, deltag = set(), set(), set()
-        inodo_mapa = build_inode_map(raiz)
-
+        noHL_tag = TagWorker.appconfig.noHL_tag
         for thash, torrent in torrents.items():
+            tagged = noHL_tag in torrent['tags'].split(", ")
             if torrent['category'] not in TagWorker.appconfig.noHL_categories:
+                if tagged:
+                    logger.info(f"{self.name:<10} - Untagged {torrent.get('name')}: belongs to a noscan-HLs category.")
+                    deltag.add(thash)
                 continue
 
             file = torrent['content_path']
@@ -305,8 +310,6 @@ class TagWorker:
                         break
             else:
                 resultado = verificar_hardlinks(realfile, inodo_mapa)
-            noHL_tag = TagWorker.appconfig.noHL_tag
-            tagged = noHL_tag in torrent['tags'].split(", ")
             if not resultado:
                 noHLs.add(thash)
                 if not tagged:
