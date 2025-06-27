@@ -65,19 +65,20 @@ def verificar_hardlinks(target_file, inode_map):
     except FileNotFoundError:
         return "File not found."
 
-def remove_empty_dirs(path, instancename=''):
+def remove_empty_dirs(path, dryrun=True, iname=''):
+    # $ find $ROOT_FOLDER -type d -empty -delete
     if not os.path.isdir(path):
         return
 
     for name in os.listdir(path):
         fullpath = os.path.join(path, name)
         if os.path.isdir(fullpath):
-            remove_empty_dirs(fullpath, instancename)
+            remove_empty_dirs(fullpath, dryrun, iname)
 
     # Después de eliminar los posibles subdirectorios vacíos, comprobamos si el actual está vacío
     if not os.listdir(path):
         try:
-            # os.rmdir(path)
-            logger.info(f'%-10s - Removed empty dir: {path}', instancename)
+            if not dryrun: os.rmdir(path)
+            logger.info(f"{iname:<10} - Removed empty dir: {path}")
         except OSError as e:
-            logger.warning(f'%-10s - Error deleting {path}: {e}', instancename)
+            logger.warning(f"{iname:<10} - Error deleting {path}: {e}")

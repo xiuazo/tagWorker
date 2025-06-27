@@ -14,7 +14,7 @@ from pytimeparse2 import parse
 from modules.config import Config
 from modules.logger import logger
 from modules.qbit import qBit
-from modules.files import move_to_dir, is_file, build_inode_map, verificar_hardlinks, translate_path
+from modules.files import move_to_dir, is_file, build_inode_map, verificar_hardlinks, translate_path, remove_empty_dirs
 
 def print_banner(version="0.0.1"):
     # ANSI codes
@@ -193,6 +193,10 @@ class TagWorker:
                 if commands.get('prune_orphaned'):
                     # logger.info(f"{self.name:<10} - pruning old orphans")
                     self.disk_prune_old()
+
+                if commands.get('delete_empty_dirs'):
+                    remove_empty_dirs(self.folders.get('root_path'), self.dryrun, self.name)
+
             except Exception as e:
                 logger.error(f"Error: {e}\n{traceback.format_exc()}")
 

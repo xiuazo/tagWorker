@@ -1,5 +1,5 @@
 start.sh
-config.yml
+config.yml*
 
 logs/
 .vscode/
