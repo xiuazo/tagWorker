@@ -107,22 +107,21 @@ def main():
         print("Please ensure all required environment variables are set in the .env file.")
         sys.exit(1)
 
-    qbit_client = qbittorrentapi.Client(
-        host=QBIT_URL,
-        username=QBIT_USER,
-        password=QBIT_PASS
-    )
+    conn_info = dict({
+        'host': QBIT_URL,
+        'username': QBIT_USER,
+        'password': QBIT_PASS
+    })
 
-    torrents = qbit_client.torrents_info(category=TORRENT_CATEGORY)
+    with qbittorrentapi.Client(**conn_info) as qbt_client:
+        torrents = qbt_client.torrents_info(category=TORRENT_CATEGORY)
 
-    if not torrents:
-        print(f"No torrents found in category '{TORRENT_CATEGORY}'.")
-    else:
-        inode_dict = build_inode_dict(ROOTDIR)
-        tag_queue = process_torrents(torrents, inode_dict)
-        apply_tags(qbit_client, tag_queue)
-
-    qbit_client.auth_log_out()
+        if not torrents:
+            print(f"No torrents found in category '{TORRENT_CATEGORY}'.")
+        else:
+            inode_dict = build_inode_dict(ROOTDIR)
+            tag_queue = process_torrents(torrents, inode_dict)
+            apply_tags(qbt_client, tag_queue)
 
 
 if __name__ == "__main__":
