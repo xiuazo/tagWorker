@@ -1,8 +1,8 @@
 import os
-from urllib.parse import urlparse
-from datetime import datetime, timedelta
 from dotenv import load_dotenv
-
+from collections import defaultdict
+from datetime import datetime, timedelta
+from urllib.parse import urlparse
 import qbittorrentapi
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -10,9 +10,9 @@ dotenv_path = os.path.join(script_dir, '.env')
 load_dotenv(dotenv_path, override=True)
 
 clients = [
-  [os.getenv("QBITTORRENT_URL"), os.getenv("QBITTORRENT_USERNAME"), os.getenv("QBITTORRENT_PASSWORD")],
-  [os.getenv("QBITTORRENT_HBD_URL"), os.getenv("QBITTORRENT_HBD_USERNAME"), os.getenv("QBITTORRENT_HBD_PASSWORD")],
-  [os.getenv("QBITTORRENT_DOCK_URL"), os.getenv("QBITTORRENT_DOCK_USERNAME"), os.getenv("QBITTORRENT_DOCK_PASSWORD")]
+  {"host": os.getenv("QBITTORRENT_URL"), "username": os.getenv("QBITTORRENT_USERNAME"), "password": os.getenv("QBITTORRENT_PASSWORD")},
+  {"host": os.getenv("QBITTORRENT_HBD_URL"), "username": os.getenv("QBITTORRENT_HBD_USERNAME"), "password": os.getenv("QBITTORRENT_HBD_PASSWORD")},
+  {"host": os.getenv("QBITTORRENT_DOCK_URL"), "username": os.getenv("QBITTORRENT_DOCK_USERNAME"), "password": os.getenv("QBITTORRENT_DOCK_PASSWORD")}
 ]
 max_allowed = 50
 
@@ -20,36 +20,26 @@ RED = "\033[91m"
 RESET = "\033[0m"
 
 def main():
-  tracker_dict = {}
+  tracker_dict = defaultdict(int)
 
-  for url, user, password in clients:
-    qbit_client = qbittorrentapi.Client(host=url, username=user, password=password)
-    try:
-       qbit_client.auth_log_in()
-    except qbittorrentapi.LoginFailed as e :
-       print(e)
-
-    torrents = qbit_client.torrents_info()
+  for client_config in clients:
+    if not all(client_config.values()):
+        continue
+    with qbittorrentapi.Client(**client_config) as qbit_client:
+      torrents = qbit_client.torrents_info()
 
     for t in torrents:
+      if not t.tracker: continue
       tracker = urlparse(t.tracker).hostname
-      last = tracker_dict.get(tracker, 0)
-      if not tracker:
-#         print(f'{t.get("name")} has no tracker.')
-         continue
-
-      if last < t.added_on:
+      last_added = tracker_dict[tracker]
+      if t.added_on > last_added:
           tracker_dict[tracker] = t.added_on
 
-  for key in sorted(tracker_dict.keys()):
-  # for key in tracker_dict.keys():
-    host = key.split('.')[-2]
-    # host = key
-    val = tracker_dict[key]
+  for key, val in sorted(tracker_dict.items()):
     last_time = datetime.fromtimestamp(val).strftime('%d/%m/%y')
     diferencia = timedelta(seconds=datetime.now().timestamp() - val).days
 
-    print(f"{(RED if diferencia > max_allowed else '')}{host}: last torrent added on {last_time} ({diferencia} days ago){RESET}")
+    print(f"{(RED if diferencia > max_allowed else '')}{key}: last torrent added on {last_time} ({diferencia} days ago){RESET}")
 
 
 if __name__ == "__main__":
