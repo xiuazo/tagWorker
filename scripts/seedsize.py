@@ -9,9 +9,9 @@ dotenv_path = os.path.join(script_dir, '.env')
 load_dotenv(dotenv_path, override=True)
 
 clients = [
-  [os.getenv("QBITTORRENT_URL"), os.getenv("QBITTORRENT_USERNAME"), os.getenv("QBITTORRENT_PASSWORD")],
-  [os.getenv("QBITTORRENT_HBD_URL"), os.getenv("QBITTORRENT_HBD_USERNAME"), os.getenv("QBITTORRENT_HBD_PASSWORD")],
-  [os.getenv("QBITTORRENT_DOCK_URL"), os.getenv("QBITTORRENT_DOCK_USERNAME"), os.getenv("QBITTORRENT_DOCK_PASSWORD")]
+  {"host": os.getenv("QBITTORRENT_URL"), "username": os.getenv("QBITTORRENT_USERNAME"), "password": os.getenv("QBITTORRENT_PASSWORD")},
+  {"host": os.getenv("QBITTORRENT_HBD_URL"), "username": os.getenv("QBITTORRENT_HBD_USERNAME"), "password": os.getenv("QBITTORRENT_HBD_PASSWORD")},
+  {"host": os.getenv("QBITTORRENT_DOCK_URL"), "username": os.getenv("QBITTORRENT_DOCK_USERNAME"), "password": os.getenv("QBITTORRENT_DOCK_PASSWORD")}
 ]
 
 def human_readable_size(size_in_bytes):
@@ -43,8 +43,7 @@ def sum_seedsizes(torrent_list):
         tracker_count[tracker_name] += 1
     return trackers, tracker_count
 
-def print_tracker_sizes(torrent_list):
-    trackers, count = sum_seedsizes(torrent_list)
+def print_tracker_sizes(trackers, count):
     sorted_trackers = sorted(trackers.items(), key=lambda item: item[1], reverse=True)
 
     for tracker, size in sorted_trackers:
@@ -53,11 +52,13 @@ def print_tracker_sizes(torrent_list):
 def main():
     allt = []
     try:
-        for url, user, password in clients:
-            qbit_client = qbittorrentapi.Client(host=url, username=user, password=password)
-            torrents = qbit_client.torrents_info()
-            allt += torrents
-        print_tracker_sizes(allt)
+        for client_config in clients:
+            if not all(client_config.values()):
+                continue
+            with qbittorrentapi.Client(**client_config) as qbit_client:
+                allt += qbit_client.torrents_info()
+        trackersize, trackertorrentcount = sum_seedsizes(allt)
+        print_tracker_sizes(trackersize, trackertorrentcount)
     except Exception as e:
         print(f'{e}')
 
