@@ -3,8 +3,9 @@ import requests
 from urllib.parse import urljoin
 from dotenv import load_dotenv
 
-# Cargar variables del archivo .env
-load_dotenv()
+script_dir = os.path.dirname(os.path.abspath(__file__))
+dotenv_path = os.path.join(script_dir, '.env')
+load_dotenv(dotenv_path, override=True)
 
 # Configuración
 QB_URL = os.getenv('QBITTORRENT_URL')

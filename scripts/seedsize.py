@@ -2,8 +2,11 @@ import os
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 import qbittorrentapi
+from collections import defaultdict
 
-load_dotenv()
+script_dir = os.path.dirname(os.path.abspath(__file__))
+dotenv_path = os.path.join(script_dir, '.env')
+load_dotenv(dotenv_path, override=True)
 
 clients = [
   [os.getenv("QBITTORRENT_URL"), os.getenv("QBITTORRENT_USERNAME"), os.getenv("QBITTORRENT_PASSWORD")],
@@ -27,18 +30,15 @@ def human_readable_size(size_in_bytes):
         return f"{size_in_bytes / 1024**5:.2f} PiB"
 
 def sum_seedsizes(torrent_list):
-    trackers = dict()
-    tracker_count = dict()
     uniquehashes = set()
+    trackers = defaultdict(float)
+    tracker_count = defaultdict(int)
 
     for torrent in torrent_list:
         if not torrent.tracker or torrent.hash in uniquehashes:
             continue
         uniquehashes.add(torrent.hash)
         tracker_name = urlparse(torrent.tracker).hostname
-        if tracker_name not in trackers:
-            trackers[tracker_name] = 0
-            tracker_count[tracker_name] = 0
         trackers[tracker_name] += torrent.size
         tracker_count[tracker_name] += 1
     return trackers, tracker_count

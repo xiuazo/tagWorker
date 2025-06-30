@@ -2,7 +2,9 @@ import requests
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
+script_dir = os.path.dirname(os.path.abspath(__file__))
+dotenv_path = os.path.join(script_dir, '.env')
+load_dotenv(dotenv_path, override=True)
 
 # CONFIG
 ROOTDIR = os.getenv('TORRENTS_PATH') # ruta al torrentdir real en el disco, completa

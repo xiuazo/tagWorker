@@ -3,10 +3,11 @@ from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# pip install qbittorrent-api
 import qbittorrentapi
 
-load_dotenv()
+script_dir = os.path.dirname(os.path.abspath(__file__))
+dotenv_path = os.path.join(script_dir, '.env')
+load_dotenv(dotenv_path, override=True)
 
 clients = [
   [os.getenv("QBITTORRENT_URL"), os.getenv("QBITTORRENT_USERNAME"), os.getenv("QBITTORRENT_PASSWORD")],

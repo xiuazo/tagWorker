@@ -3,7 +3,9 @@ import os
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+script_dir = os.path.dirname(os.path.abspath(__file__))
+dotenv_path = os.path.join(script_dir, '.env')
+load_dotenv(dotenv_path, override=True)
 
 QBIT_URL = os.getenv('QBITTORRENT_URL')
 QBIT_USER = os.getenv('QBITTORRENT_USERNAME')
@@ -19,10 +21,6 @@ ORPHANFOLDER = '.orphaned_data'
 CROSS_SEED_TAG = "xs"
 PREFIX_TAG = "xs."
 POSTFIX_TAG = ""
-
-def clear_screen():
-    return
-    os.system('cls' if os.name == 'nt' else 'clear')
 
 def build_inode_dict(rootdir):
     inode_dict = {}
@@ -156,8 +154,6 @@ def main():
         return
 
     try:
-        clear_screen()
-
         inode_dict = build_inode_dict(ROOTDIR)
         session = requests.Session()
 

@@ -2,3 +2,5 @@ pytimeparse2
 requests
 pyyaml
 tldextract
+bencodepy
+qbittorrent-api
