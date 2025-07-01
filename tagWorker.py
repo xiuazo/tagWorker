@@ -6,15 +6,18 @@ import uuid
 import traceback
 import platform
 import tldextract
+import yaml
 
 from collections import defaultdict
 from datetime import timedelta
 from pytimeparse2 import parse
 
-from modules.config import Config
+from modules.config import Config, GlobalConfig
 from modules.logger import logger
 from modules.qbit import qBit
 from modules.files import move_to_dir, is_file, build_inode_map, verificar_hardlinks, translate_path, remove_empty_dirs
+
+CONFIG_FILE = 'config/config.yml'
 
 def print_banner(version="0.0.1"):
     # ANSI codes
@@ -56,23 +59,24 @@ print_banner()
 # =========================================================================
 
 class TagWorker:
-    appconfig = {}
     instances = []
-
-    new_torrents = False
     instance_reactions = {}
 
-    def __init__(self, qbit, config):
+    new_torrents = False
+
+    def __init__(self, qbit, name, config):
         self.id = uuid.uuid4()
         self.client = qbit
-        self.commands = config['commands']
-        self.folders = config.get('folders')
-        self.translation_table = config.get('translation_table',[])
-        self.share_limits = config['share_limits']
-        self.name = config.get('name', tldextract.extract(config['url']).domain)
+        self.config = config
+        self.name = name or tldextract.extract(config['url']).domain
+        self.commands = getattr(config, 'commands', None)
+        self.folders = getattr(config, 'folders', None)
+        self.translation_table = getattr(config, 'translation_table', None)
+        self.share_limits = getattr(config, 'share_limits', None)
+        self.dryrun = getattr(config, 'dryrun', True)
+        self.localinstance = getattr(config, 'local_instance', False)
+
         self.changes_dict = {}
-        self.dryrun = config.get("dryrun", True)
-        self.localinstance = config.get("local_instance", False)
         self._full_update_time = 0
 
         self.stop_event = threading.Event()
@@ -119,7 +123,7 @@ class TagWorker:
 
             prev_torrents = set(self.client.status.get('torrents', {}).keys())
 
-            request_fullsync = time.time() - self._full_update_time > parse(TagWorker.appconfig.fullsync_interval)
+            request_fullsync = time.time() - self._full_update_time > parse(GlobalConfig.get('app.fullsync_interval'))
             self.client.sync(request_fullsync)
             if request_fullsync:
                 logger.info("%-10s - SYNCING WITH FULL DATA", self.name)
@@ -133,7 +137,7 @@ class TagWorker:
 
             tags_changed = False
 
-            if TagWorker.appconfig.scan_dupes and not TagWorker.instance_reactions[self]:
+            if GlobalConfig.get('app.dupes.enabled', False) and not TagWorker.instance_reactions[self]:
                 tags_changed |= self.tag_dupes()
                 TagWorker.instance_reactions[self] = True
 
@@ -163,18 +167,19 @@ class TagWorker:
                 sl_torrent_queue.clear()
                 # logger.debug(f"{self.name:<10} - sleeping {parse(TagWorker.appconfig.tagging_schedule_interval)}s...")
                 self.tag_idle.set()
-                self.tag_trigger.wait(timeout=parse(TagWorker.appconfig.tagging_schedule_interval))
+                self.tag_trigger.wait(timeout=parse(GlobalConfig.get('app.tagging_schedule_interval')))
                 self.tag_trigger.clear()
             else:
                 logger.debug(f"{self.name:<10} - changes have been made. looping...")
                 self.stop_event.wait(2) # delay para que qbit aplique cambios. no uso tag_trigger pq no quiero que disk_task lo arranque. es un delay interrumpible, sin mas
 
     def task_disk(self):
-        commands = self.commands
         if not self.localinstance:
             self.disk_idle.set()
             return
 
+        commands = self.commands
+        dry_run = self.dryrun
         while not self.stop_event.is_set():
             tagged = False
             try:
@@ -188,14 +193,14 @@ class TagWorker:
                     tagged = self.disk_noHL()
                 if commands.get('clean_orphaned'):
                     # logger.info(f"{self.name:<10} - moving orphan files")
-                    self.disk_clean_orphans()
+                    self.disk_clean_orphans(dry_run)
 
                 if commands.get('prune_orphaned'):
                     # logger.info(f"{self.name:<10} - pruning old orphans")
-                    self.disk_prune_old()
+                    self.disk_prune_old(dry_run)
 
                 if commands.get('delete_empty_dirs'):
-                    remove_empty_dirs(self.folders.get('root_path'), self.dryrun, self.name)
+                    remove_empty_dirs(self.folders.get('root_path'), dry_run, self.name)
 
             except Exception as e:
                 logger.error(f"Error: {e}\n{traceback.format_exc()}")
@@ -205,9 +210,9 @@ class TagWorker:
             if tagged:
                 logger.debug(f"{self.name:<10} - triggering tag task")
                 self.tag_trigger.set()
-            self.stop_event.wait(timeout=parse(TagWorker.appconfig.disktasks_schedule_interval))
+            self.stop_event.wait(timeout=parse(GlobalConfig.get("app.disktasks_schedule_interval")))
 
-    def disk_clean_orphans(self):
+    def disk_clean_orphans(self, dry_run = True):
         root_path = self.folders.get('root_path')
         orphan_path = self.folders.get('orphaned_path')
 
@@ -242,16 +247,16 @@ class TagWorker:
         #     return
         logger.info(f'%-10s - {len(orphaned_files)} orphan files moved to {orphan_path}', self.name)
         for file in sorted(orphaned_files):
-            if not self.dryrun:
+            if not dry_run:
                 move_to_dir(root_path, orphan_path, file)
                 logger.info(f"%-10s - moved {file} to {orphan_path}", self.name)
             else:
                 logger.info(f"%-10s - *** DRY-RUN *** moved {file} to {orphan_path}", self.name)
         # remove_empty_dirs(root_path, url)
 
-    def disk_prune_old(self):
+    def disk_prune_old(self, dry_run = True):
         path = self.folders.get('orphaned_path')
-        expire_time = parse(TagWorker.appconfig.prune_orphaned_time)
+        expire_time = parse(GlobalConfig.get("app.prune_orphaned_time"))
 
         time_limit = time.time() - expire_time
         files_to_delete = set()
@@ -266,7 +271,7 @@ class TagWorker:
             logger.info(f'%-10s - recycling {len(files_to_delete)} old orphans.', self.name)
             try:
                 for fullpath in files_to_delete:
-                    if not self.dryrun:
+                    if not dry_run:
                         os.remove(fullpath)
                         logger.info(f"%-10s - Deleted {os.path.basename(fullpath)}", self.name)
                     else:
@@ -291,10 +296,11 @@ class TagWorker:
         if torrents:
             inodo_mapa = build_inode_map(raiz)
         noHLs, addtag, deltag = set(), set(), set()
-        noHL_tag = TagWorker.appconfig.noHL_tag
+        noHL_tag = GlobalConfig.get("app.noHL.tag")
+        noHL_cats = GlobalConfig.get("app.noHL.categories")
         for thash, torrent in torrents.items():
             tagged = noHL_tag in torrent['tags'].split(", ")
-            if torrent['category'] not in TagWorker.appconfig.noHL_categories:
+            if torrent['category'] not in noHL_cats:
                 continue
 
             file = torrent['content_path']
@@ -337,7 +343,8 @@ class TagWorker:
         """
         if not self.localinstance:
             return False
-        noHL_tag = TagWorker.appconfig.noHL_tag
+        noHL_tag = GlobalConfig.get("app.noHL.tag")
+        noHL_cats = GlobalConfig.get("app.noHL.categories")
         torrents = self.torrents_changed({'category', 'tags'})
         torrents = {th: tval for th, tval in torrents.items() if noHL_tag in tval['tags'].split(", ")} # filter torrents by noHL tag
         if not self.commands.get('tag_noHL'):
@@ -346,7 +353,7 @@ class TagWorker:
         else:
             hashes = set()
             for thash, torrent in torrents.items():
-                if torrent.get('category') not in TagWorker.appconfig.noHL_categories:
+                if torrent.get('category') not in noHL_cats:
                     logger.info(f"{self.name:<10} - Untagged {noHL_tag} {torrent.get('name')}: disabled category")
                     hashes.add(thash)
         if hashes:
@@ -360,13 +367,14 @@ class TagWorker:
 
         addtag = set()
         deltag = set()
-        tag = TagWorker.appconfig.lowseeds_tag
+        tag = GlobalConfig.get("app.lowseeds.tag")
+        min_seeds = GlobalConfig.get("app.lowseeds.min_seeds")
         for thash, torrent in torrents.items():
             tags = torrent.get('tags').split(', ')
             seeds = torrent.get('num_complete')
             if torrent.get('state','') in ['pausedUP','pausedDL', 'error', 'unknown']: # filtramos solos los que estan normal XD
                 continue
-            if seeds < TagWorker.appconfig.min_seeds and isinstance(seeds, int):
+            if seeds < min_seeds and isinstance(seeds, int):
                 if tag not in tags:
                     addtag.add(thash)
             elif tag in tags:
@@ -379,7 +387,7 @@ class TagWorker:
         return bool(addtag or deltag)
 
     def tag_dupes(self):
-        config = TagWorker.appconfig
+        dupetag = GlobalConfig.get("app.dupes.tag")
 
         torrents = set()
         multiple_instances = False
@@ -399,7 +407,7 @@ class TagWorker:
         deltag = set()
         for thash, tval in my_torrents.items():
             tags = my_torrents[thash]['tags'].split(", ")
-            if config.dupe_tag in tags:
+            if dupetag in tags:
                 if thash not in dupes:
                     logger.debug(f"{self.name:<10} - {tval['name']} is a NOT dupe but it's tagged")
                     deltag.add(thash)
@@ -407,8 +415,8 @@ class TagWorker:
                     logger.debug(f"{self.name:<10} - {tval['name']} is a dupe")
                     addtag.add(thash)
 
-        if addtag: self.client.add_tags(addtag, config.dupe_tag) # taguea dupes
-        if deltag: self.client.remove_tags(deltag, config.dupe_tag)
+        if addtag: self.client.add_tags(addtag, dupetag) # taguea dupes
+        if deltag: self.client.remove_tags(deltag, dupetag)
 
         logger.info(f"{self.name:<10} - Found {len(dupes)} dupes across all clients. Tagged {len(addtag)} - Untagged {len(deltag)}")
 
@@ -421,7 +429,7 @@ class TagWorker:
             return False
 
         errored, unerrored = set(), set()
-        errortag = TagWorker.appconfig.issue_tag
+        errortag = GlobalConfig.get("app.issue.tag")
         for thash, torrent in torrents.items():
             ttags = torrent.get('tags').split(", ")
             if torrent.get('state') in ['pausedUP','pausedDL', 'error', 'unknown']:
@@ -461,10 +469,10 @@ class TagWorker:
         if not torrents:
             return False
 
-        tracker_rules = TagWorker.appconfig.trackers_HR_rules
-        hr_tag = TagWorker.appconfig.hr_tag
-        exclude_xseed = TagWorker.appconfig.exclude_xseed
-        autostart_hr = TagWorker.appconfig.autostart_hr
+        tracker_rules = GlobalConfig.get("tracker_details")
+        hr_tag = GlobalConfig.get("app.HR.tag")
+        exclude_xseed = GlobalConfig.get("app.HR.exclude_xseed")
+        autostart_hr = GlobalConfig.get("app.HR.autostart")
 
         unsatisfied = set()
         satisfied = set()
@@ -475,14 +483,16 @@ class TagWorker:
             torrent_ratio = torrent['ratio']
             torrent_tags = torrent.get('tags', '').split(", ")
 
-            for key, (req_time, min_ratio, percent) in tracker_rules.items():
+            for key, rules in tracker_rules.items():
                 if any(word in torrent['tracker'] for word in key.split("|")):
+                    hr = getattr(rules, 'HR', None)
                     # satisfied
                     if (
-                        (seeding_time > req_time)
-                        or (min_ratio is not None and torrent_ratio > min_ratio)
+                        not hr
+                        or (seeding_time > parse(hr.time))
+                        or (getattr(hr,'ratio', None) and torrent_ratio > hr.ratio)
                         or (exclude_xseed and torrent['downloaded'] == 0)
-                        or (percent and (torrent['downloaded'] < (percent/100) * torrent['size']))
+                        or (getattr(hr, 'percent', None) and (torrent['downloaded'] < (hr.percent/100) * torrent['size']))
                         ):
                         if hr_tag in torrent_tags:
                             satisfied.add(thash)
@@ -511,7 +521,7 @@ class TagWorker:
 
     def tag_HUNO(self):
         def tag(name):
-            return TagWorker.appconfig.huno_tag_prefix + name
+            return GlobalConfig.get("app.huno_tag_prefix") + name
         torrents = self.torrents_changed({'seeding_time', 'tags'})
         client = self.client
 
@@ -565,21 +575,21 @@ class TagWorker:
     def tag_TMM(self):
         torrents = self.torrents_changed({'auto_tmm', 'tags', 'category'})
         client = self.client
-        config = TagWorker.appconfig
+        config = GlobalConfig.get("app.noTMM")
 
         if not torrents:
             return False
 
         logger.info(f'%-10s - checking {len(torrents)} torrents autoTMM', self.name)
 
-        tag = config.noTMM_tag
-        ignoredtags = set(config.tmm_ignoretags or {})
-        ignoredcats = set(config.tmm_ignored_categories or {})
+        tag = config.tag
+        ignoredtags = getattr(config, 'ignored_tags', {})
+        ignoredcats = getattr(config, 'ignored_categories', {})
         tag_add = set()
         tag_remove = set()
         for thash, tval in torrents.items():
             ttags = set(tval['tags'].split(', '))
-            if tval['auto_tmm'] or ttags & ignoredtags or tval['category'] in ignoredcats:
+            if tval['auto_tmm'] or (ignoredtags and ttags & ignoredtags) or (ignoredcats and tval['category'] in ignoredcats):
                 # no deberia tenerlo
                 if tag in ttags:
                     tag_remove.add(thash)
@@ -589,7 +599,7 @@ class TagWorker:
 
         if tag_add:
             # si activamos el tmm ya no hace falta taguearlo
-            if config.enable_tmm:
+            if config.auto_enable:
                 client.enable_tmm(tag_add)
             else:
                 client.add_tags(tag_add, tag)
@@ -600,7 +610,7 @@ class TagWorker:
 
     def tag_rename(self):
         client = self.client
-        tags_to_rename = TagWorker.appconfig.tags_to_rename
+        tags_to_rename = GlobalConfig.get("app.tag_renamer")
         # obtengo la informacion de los cambios de los torrents
         changed_t = client.changes.get('tags', {}) & tags_to_rename.keys()
 
@@ -623,14 +633,13 @@ class TagWorker:
     def tag_trackers(self):
         torrents = self.torrents_changed({'tracker', 'tags'})
         client = self.client
-        config = TagWorker.appconfig
+        tracker_details = GlobalConfig.get("tracker_details")
 
         if not torrents:
             return False
 
-        tracker_details = config.tracker_details
         try:
-            default_tag = tracker_details['default']['tag']
+            default_tag = tracker_details.default.tag
         except KeyError:
             logger.warning(f"{self.name:<10} - tracker_details['default']['tag'] no está definido")
             default_tag = None
@@ -688,7 +697,7 @@ class TagWorker:
         logger.info(f"{self.name:<10} - setting {len(torrentset)} sharelimits")
 
         profiles = self.share_limits
-        tagprefix = TagWorker.appconfig.share_limits_tag_prefix
+        tagprefix = GlobalConfig.get("app.share_limits_tag_prefix")
         profiles_dict = dict()
         tagdict = dict()
 
@@ -803,41 +812,46 @@ def wait_for_event(name, wait_event, logger_prefix):
 # ===========================================
 
 def startup_msg(config=None):
+    config = GlobalConfig.get()
+
     print('')
     logger.info(f"Platform        : {platform.system()} {platform.release()}")
     logger.info(f"Python          : {platform.python_version()}")
-    logger.info(f"qBit clients    : {len(config.qb_instances)}")
+    logger.info(f"qBit clients    : {len(config.clients)}")
 
     if config:
-        tracker_HR_rules = len(config.trackers_HR_rules)
-        logger.info(f"FullSync every  : {getattr(config, 'fullsync_interval', 'N/A')}")
-        logger.info(f"Refresh interval: {getattr(config, 'tagging_schedule_interval', 'N/A')}")
-        logger.info(f"Disk Schedule   : {getattr(config, 'disktasks_schedule_interval', 'N/A')}")
-        logger.info(f"Scan Dupes      : {getattr(config, 'scan_dupes', 'N/A')}")
-        logger.info(f"Trackers        : {tracker_HR_rules}")
+        tracker_details = len(config.tracker_details)
+        logger.info(f"FullSync every  : {getattr(config.app, 'fullsync_interval', 'N/A')}")
+        logger.info(f"Refresh interval: {getattr(config.app, 'tagging_schedule_interval', 'N/A')}")
+        logger.info(f"Disk Schedule   : {getattr(config.app, 'disktasks_schedule_interval', 'N/A')}")
+        logger.info(f"Scan Dupes      : {getattr(config.app.dupes, 'enabled', 'disabled')}")
+        logger.info(f"Trackers        : {tracker_details}")
     print('')
 
-
 def main():
-    logger.info("%-10s - Logger init", "GLOBAL")
-    config = Config()
-    startup_msg(config=config)
-    TagWorker.appconfig = config
+    logger.info(f"{'GLOBAL':<10} - Logger init")
+    logger.info(f"{'GLOBAL':<10} - Reading config file")
+
+    with open(CONFIG_FILE, "r") as f:
+        app_config = Config(yaml.safe_load(f))
+    GlobalConfig.set(app_config)
+
+    startup_msg()
     threads = []
     # inits
-    for qb in config.qb_instances:
-        if not qb.get('enabled', True):
+    for name, client in GlobalConfig.get("clients").items():
+        if not client.enabled:
             continue
-        qbit = qBit(qb['url'], qb['user'], qb['password'], qb['commands'])
         try:
-            instance = TagWorker(qbit, qb)
+            qbit = qBit(client.url, client.user, client.password, client.commands)
+            instance = TagWorker(qbit, name, client)
         except Exception as e:
-            logger.critical(f"{qb['name']:<10} - {e} {str(e)}")
+            logger.critical(f"{name:<10} - {e} {str(e)}")
         # engage!
         try:
             threads.extend(instance.run())
         except Exception as e:
-            logger.error(f"%-10s - Failed to init instance: {e}", qb['name'])
+            logger.error(f"{name:<10} - Failed to init instance: {e}")
 
     # keep the main thread alive
     try:
