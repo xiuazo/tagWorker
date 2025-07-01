@@ -845,7 +845,7 @@ def main():
         if not client.enabled:
             continue
         try:
-            qbit = qBit(client.url, client.user, client.password, client.commands)
+            qbit = qBit(client.url, client.user, client.password)
             instance = TagWorker(qbit, name, client)
         except Exception as e:
             logger.critical(f"{name:<10} - {e} {str(e)}")

@@ -21,12 +21,11 @@ def deep_merge(target, source):
 class qBit:
     total_torrents = {}
 
-    def __init__(self, url, user, pwd, commands):
+    def __init__(self, url, user, pwd):
         self._uid = uuid.uuid4()
         self._url = url
         self._user = user
         self._pwd = pwd
-        self._commands = commands
 
         self._prev_status = {} # estado anterior
         self._changes = {} # diff
