@@ -473,6 +473,8 @@ class TagWorker:
         hr_tag = GlobalConfig.get("app.HR.tag")
         exclude_xseed = GlobalConfig.get("app.HR.exclude_xseed")
         autostart_hr = GlobalConfig.get("app.HR.autostart")
+        extra_time = GlobalConfig.get("app.HR.extra_seed_time")
+        extra_ratio = GlobalConfig.get("app.HR.extra_ratio")
 
         unsatisfied = set()
         satisfied = set()
@@ -489,8 +491,8 @@ class TagWorker:
                     # satisfied
                     if (
                         not hr
-                        or (seeding_time > parse(hr.time))
-                        or (getattr(hr,'ratio', None) and torrent_ratio > hr.ratio)
+                        or (seeding_time > parse(hr.time) + parse(extra_time))
+                        or (getattr(hr,'ratio', None) and torrent_ratio > hr.ratio + extra_ratio)
                         or (exclude_xseed and torrent['downloaded'] == 0)
                         or (getattr(hr, 'percent', None) and (torrent['downloaded'] < (hr.percent/100) * torrent['size']))
                         ):
