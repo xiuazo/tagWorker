@@ -3,15 +3,8 @@ config.yml*
 
 logs/
 .vscode/
+tools/
 
-scripts/*
-!scripts/xseedTags.py
-!scripts/check_torrent_health.py
-!scripts/fileCollision.py
-!scripts/inactive.py
-!scripts/seedsize.py
-!scripts/fastresume.py
-!scripts/eta_check.py
 
 
 # Byte-compiled / optimized / DLL files
