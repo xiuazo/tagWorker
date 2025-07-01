@@ -1,6 +1,7 @@
 import os
 import requests
 import uuid
+import qbittorrentapi
 
 from modules.files import is_file
 
@@ -17,8 +18,6 @@ def deep_merge(target, source):
             #     print(f'Valor vacio para clave {key}')
     return target
 
-# TODO borrar del status los torrents/categorias/tags que se eliminan
-# https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-(qBittorrent-4.1)#get-main-data
 class qBit:
     total_torrents = {}
 
@@ -28,22 +27,22 @@ class qBit:
         self._user = user
         self._pwd = pwd
         self._commands = commands
-        self._session = None
 
         self._prev_status = {} # estado anterior
         self._changes = {} # diff
         self._version = 0
         self._full_update = False
-        # self._full_update_time = 0
 
         # estado anterior + cambios. usar getter self.status()
         self._status = {}
 
-    # @classmethod
-    # def torrents(cls, uid = ''):
-    #     if uid:
-    #         return cls.total_torrents.get(uid, {})
-    #     return cls.total_torrents
+        self.client = qbittorrentapi.Client(host=url, username=user, password=pwd)
+
+    @classmethod
+    def torrents(cls, uid = ''):
+        if uid:
+            return cls.total_torrents.get(uid, {})
+        return cls.total_torrents
 
     @classmethod
     def all_torrents_iterator(cls):
@@ -74,164 +73,89 @@ class qBit:
         return self._status
 
     def sync(self, fullsync = False):
-        url = f'{self._url}/api/v2/sync/maindata?rid={0 if fullsync else self._version}'
-        try:
-            response = self._session.get(url)
-            response.raise_for_status()
-        except Exception as e:
-            raise e
+        sync_data = self.client.sync.maindata(0 if fullsync else self._version)
 
-        response = response.json()
-
-        self._version = response['rid']
-        self._changes = response
-        self._full_update = response.get('full_update',False)
+        self._version = sync_data.rid
+        self._changes = sync_data
+        self._full_update = sync_data.get("full_update")
 
         if self._full_update:
-            self._status = response
+            self._status = sync_data
             self._prev_status = {}
-        elif response:
+        elif sync_data:
             self._prev_status = self._status
 
             # this would drags old and unexisting things...
-            self._status = deep_merge(self._prev_status, response)
+            self._status = deep_merge(self._prev_status, sync_data)
             # ... if we don't clean
-            if 'tags' in response:
-                self._status['tags'] = list(set(self._status['tags']) | set(response['tags']))
-            if 'tags_removed' in response:
-                # self._status['tags'] = [tag for tag in self._status['tags'] if tag not in response['tags_removed']]
-                self._status['tags'] = list(set(self._status['tags']) - set(response['tags_removed']))
-            if 'categories' in response:
-                self._status['categories'].update(response['categories'])
-            if 'categories_removed' in response:
-                self._status['categories'] = {cname:cval for cname, cval in self._status['categories'].items() if cname not in response['categories_removed']}
-            if 'torrents_removed' in response:
-                self._status['torrents'] = {th:tv for th, tv in self._status['torrents'].items() if th not in response['torrents_removed']}
+            if 'tags' in sync_data:
+                self._status['tags'] = list(set(self._status['tags']) | set(sync_data['tags']))
+            if 'tags_removed' in sync_data:
+                self._status['tags'] = list(set(self._status['tags']) - set(sync_data['tags_removed']))
+            if 'categories' in sync_data:
+                self._status['categories'].update(sync_data['categories'])
+            if 'categories_removed' in sync_data:
+                self._status['categories'] = {cname:cval for cname, cval in self._status['categories'].items() if cname not in sync_data['categories_removed']}
+            if 'torrents_removed' in sync_data:
+                self._status['torrents'] = {th:tv for th, tv in self._status['torrents'].items() if th not in sync_data['torrents_removed']}
 
         self.store_torrents()
 
     def login(self):
-        url = f'{self._url}/api/v2/auth/login'
-        data = {
-            "username": self._user,
-            "password": self._pwd
-        }
-        session = requests.Session()
-        self._session = session
-
-        try:
-            response = session.post(url, data=data)
-            if response.ok and response.text == "Ok.":
-                return session
-        except Exception as e:
-            raise e
+        pass
 
     def logout(self):
-        url = f'{self._url}/api/v2/auth/logout'
-        response = self._session.post(url)
-        if response.ok and response.status_code == 200:
-            return
-        raise Exception("Error logging out with qBittorrent")
+        pass
 
     def add_tags(self, hashes, tag):
-        url = f"{self._url}/api/v2/torrents/addTags"
-        data = {
-            "hashes": "|".join(hashes),
-            "tags": tag
-        }
-        response = self.session.post(url, data=data)
-        response.raise_for_status()
+        self.client.torrent_tags.add_tags(tag, hashes)
 
     def remove_tags(self, hashes, tags):
-        url = f"{self._url}/api/v2/torrents/removeTags"
-        if isinstance(hashes, str): hashes = [hashes]
-        if isinstance(tags, str): tags = [tags]
-        data = {
-            "hashes": "|".join(hashes),
-            "tags": ",".join(tags)
-        }
-        response = self._session.post(url, data=data)
-        response.raise_for_status()
+        self.client.torrent_tags.remove_tags(tags, hashes)
 
     def get_torrent_files(self, thash):
+        files = self.client.torrents.files(thash)
+
         # Si es un archivo único, devuelve su ruta
         torrent = self._status.get('torrents', {})[thash]
-        content_path = torrent['content_path']
+        content_path = torrent.content_path
         if is_file(content_path):
             return {content_path}
-        # Si es múltiple, llama a la API para obtener la lista de archivos
-        url = f'{self._url}/api/v2/torrents/files?hash={thash}'
-        response = self._session.get(url)
-        response.raise_for_status()
+
         filelist = set()
-        for file in response.json():
+        for file in files:
             # WARNING windows necesita normalizacion o uniria el path con el filename mediante /
-            filelist.add(os.path.join(torrent['save_path'], file['name']))
+            filelist.add(os.path.join(torrent.save_path, file.name))
         return filelist
 
     def delete_tags(self, tags):
-        url = f"{self._url}/api/v2/torrents/deleteTags"
-        if isinstance(tags, str):
-            tags = [tags]
-        data = {
-            "tags": ",".join(tags)
-        }
-        response = self._session.post(url, data=data)
-        response.raise_for_status()
+        self.client.torrent_tags.delete_tags(tags)
 
     def force_start(self, hashes):
-        url = f'{self._url}/api/v2/torrents/setForceStart'
-        data = {
-            'value':"true",
-            'hashes': "|".join(hashes)
-        }
-        response = self._session.post(url, data=data)
-        response.raise_for_status()
+        self.client.torrents.set_force_start(hashes)
 
     def resume_torrents(self, hashes):
-        url = f'{self._url}/api/v2/torrents/resume'
-        data = {
-            'hashes': "|".join(hashes)
-        }
-        response = self._session.post(url, data=data)
-        response.raise_for_status()
+        self.client.torrents.resume(hashes)
 
-    def enable_tmm(self, torrents):
-        data = {
-            'hashes': "|".join(torrents),
-            'enable': "true"
-        }
-        response = self._session.post(f'{self._url}/api/v2/torrents/setAutoManagement', data=data)
-        response.raise_for_status()
+    def enable_tmm(self, hashes):
+        self.client.torrents.set_auto_management(hashes)
 
     def sharelimit(self, hashes, limits):
-        limits = {
-            'hashes': "|".join(hashes),
-            'ratioLimit': limits['ratio'] if limits['ratio'] is not None else -2,
-            'seedingTimeLimit': limits['time'] if limits['time'] is not None else -2,
-            'inactiveSeedingTimeLimit': -2
+        limit = {
+            'torrent_hashes': hashes,
+            'ratio_limit': limits['ratio'] if limits['ratio'] is not None else -2,
+            'seeding_time_limit': limits['time'] if limits['time'] is not None else -2,
+            'inactive_seeding_time_limit': -2
         }
-        response = self._session.post(f'{self._url}/api/v2/torrents/setShareLimits', data=limits)
-        response.raise_for_status()
+        self.client.torrents.set_share_limits(**limit)
 
     def uploadlimit(self, hashes, limit):
-        data = {
-            'hashes': "|".join(hashes),
-            'limit': limit * 1024
-        }
-        response = self._session.post(f'{self._url}/api/v2/torrents/setUploadLimit', data=data)
-        response.raise_for_status()
+        self.client.torrents_set_upload_limit(limit*1024, hashes)
 
 # =================================================================
 
     def get_torrents(self):
-        url = f'{self._url}/api/v2/torrents/info'
-        response = self._session.get(url)
-        response.raise_for_status()
-        return response.json()
+        return self.client.torrents_info()
 
     def get_trackers(self, thash):
-        url = f'{self._url}/api/v2/torrents/trackers?hash={thash}'
-        response = self._session.get(url)
-        response.raise_for_status()
-        return response.json()
+        return self.client.torrents.trackers(thash)
