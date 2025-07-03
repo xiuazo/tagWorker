@@ -1,9 +1,8 @@
 import os
-import requests
 import uuid
 import qbittorrentapi
 
-from modules.files import is_file
+from .files import is_file
 
 def deep_merge(target, source):
     for key, value in source.items():

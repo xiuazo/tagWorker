@@ -1,0 +1,94 @@
+import sys
+import platform
+import time
+
+from tagworker import CONFIG_FILE
+from .logger import logger
+from .config import Config, GlobalConfig
+from .worker import worker
+
+def print_banner(version="0.0.1"):
+    # ANSI codes
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    FG_WHITE = "\033[37m"
+    FG_YELLOW = "\033[33m"
+    FG_CYAN = "\033[36m"
+    FG_GREEN = "\033[32m"
+    # Disable if not interactive terminal
+    if not sys.stdout.isatty():
+        RESET = BOLD = DIM = FG_WHITE = FG_YELLOW = FG_CYAN = FG_GREEN = ""
+
+    banner = fr"""
+   __             _       __           __
+  / /_____ _____ | |     / /___  _____/ /_____  _____
+ / __/ __ `/ __ `/ | /| / / __ \/ ___/ //_/ _ \/ ___/
+/ /_/ /_/ / /_/ /| |/ |/ / /_/ / /  / ,< /  __/ /
+\__/\__,_/\__, / |__/|__/\____/_/  /_/|_|\___/_/
+         /____/
+
+"""
+
+    print(f"{FG_CYAN}{banner}{RESET}")
+    print("-" * 72)
+    print(f"{BOLD}Version         : {FG_GREEN}{version}{RESET}")
+    print(f"{BOLD}License         : {FG_YELLOW}GNU General Public License v3.0{RESET}")
+    print(f"{BOLD}                  {DIM}https://www.gnu.org/licenses/gpl-3.0.html{RESET}")
+    print(f"{BOLD}Copyright       : {FG_CYAN}(C) 2025 xiu{RESET}")
+    print(f"{BOLD}                  {FG_CYAN}https://github.com/xiuazo/tagWorker{RESET}")
+    print(f"{BOLD}                  {FG_WHITE}This is free software. You may modify and")
+    print(f"{BOLD}                  {FG_WHITE}redistribute it under the same license.{RESET}")
+    print("-" * 72)
+
+def startup_msg(config=None):
+    config = GlobalConfig.get()
+
+    print('')
+    logger.info(f"Platform        : {platform.system()} {platform.release()}")
+    logger.info(f"Python          : {platform.python_version()}")
+    logger.info(f"qBit clients    : {len(config.clients)}")
+
+    if config:
+        tracker_details = len(config.tracker_details)
+        logger.info(f"FullSync every  : {getattr(config.app, 'fullsync_interval', 'N/A')}")
+        logger.info(f"Refresh interval: {getattr(config.app, 'tagging_schedule_interval', 'N/A')}")
+        logger.info(f"Disk Schedule   : {getattr(config.app, 'disktasks_schedule_interval', 'N/A')}")
+        logger.info(f"Scan Dupes      : {getattr(config.app.dupes, 'enabled', 'disabled')}")
+        logger.info(f"Trackers        : {tracker_details}")
+    print('')
+
+def main():
+    print_banner()
+    logger.info(f"{'GLOBAL':<10} - Logger init")
+    logger.info(f"{'GLOBAL':<10} - Reading config file")
+
+    app_config = Config(CONFIG_FILE)
+    GlobalConfig.set(app_config)
+
+    startup_msg()
+    # inits
+    for name, client in GlobalConfig.get("clients").items():
+        if not client.enabled:
+            continue
+        try:
+            instance = worker(name, client)
+            instance.run()
+        except Exception as e:
+            logger.critical(f"{name:<10} - {e} {str(e)}")
+            raise
+
+    try:
+        while True:
+            time.sleep(1000)
+    except (KeyboardInterrupt, SystemExit):
+        for instance in worker.get_instances():
+            try:
+                logger.info(f'%-10s - Stopping instance', instance.name)
+                instance.stop()
+            except Exception as e:
+                logger.error(f"%-10s - Unable to stop instance", instance.name)
+
+if __name__ == "__main__":
+
+    main()

@@ -1,7 +1,6 @@
 import os
 import time
-from modules.logger import logger
-from pytimeparse2 import parse
+from .logger import logger
 
 def is_file(content_path):
     if os.path.isdir(content_path):

@@ -1,3 +1,5 @@
+import yaml
+
 class GlobalConfig:
     _config = None
     DEFAULTS = {
@@ -330,13 +332,19 @@ class GlobalConfig:
 
 
 class Config:
-    def __init__(self, config_dict, is_root=True):
+    def __init__(self, yaml_path=None, config_dict=None, is_root=True):
+        if is_root:
+            if yaml_path is None:
+                raise ValueError("Se debe proporcionar la ruta al fichero YAML")
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                config_dict = yaml.safe_load(f)
+
         for key, value in config_dict.items():
             if isinstance(value, dict):
-                value = Config(value, is_root=False)
+                value = Config(config_dict=value, is_root=False)
             elif isinstance(value, list):
                 value = [
-                    Config(item, is_root=False) if isinstance(item, dict) else item
+                    Config(config_dict=item, is_root=False) if isinstance(item, dict) else item
                     for item in value
                 ]
             setattr(self, key, value)

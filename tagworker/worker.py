@@ -1,72 +1,29 @@
-import sys
 import os
 import time
 import threading
 import uuid
 import traceback
-import platform
+
 import tldextract
-import yaml
 
 from collections import defaultdict
 from datetime import timedelta
 from pytimeparse2 import parse
 
-from modules.config import Config, GlobalConfig
-from modules.logger import logger
-from modules.qbit import qBit
-from modules.files import move_to_dir, is_file, build_inode_map, verificar_hardlinks, translate_path, remove_empty_dirs
+from .config import GlobalConfig
+from .logger import logger
+from .qbit import qBit
+from .files import move_to_dir, is_file, build_inode_map, verificar_hardlinks, translate_path, remove_empty_dirs
 
-CONFIG_FILE = 'config/config.yml'
-
-def print_banner(version="0.0.1"):
-    # ANSI codes
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-    FG_WHITE = "\033[37m"
-    FG_YELLOW = "\033[33m"
-    FG_CYAN = "\033[36m"
-    FG_GREEN = "\033[32m"
-    # Disable if not interactive terminal
-    if not sys.stdout.isatty():
-        RESET = BOLD = DIM = FG_WHITE = FG_YELLOW = FG_CYAN = FG_GREEN = ""
-
-    banner = fr"""
-   __             _       __           __
-  / /_____ _____ | |     / /___  _____/ /_____  _____
- / __/ __ `/ __ `/ | /| / / __ \/ ___/ //_/ _ \/ ___/
-/ /_/ /_/ / /_/ /| |/ |/ / /_/ / /  / ,< /  __/ /
-\__/\__,_/\__, / |__/|__/\____/_/  /_/|_|\___/_/
-         /____/
-
-"""
-
-    print(f"{FG_CYAN}{banner}{RESET}")
-    print("-" * 72)
-    print(f"{BOLD}Version         : {FG_GREEN}{version}{RESET}")
-    print(f"{BOLD}License         : {FG_YELLOW}GNU General Public License v3.0{RESET}")
-    print(f"{BOLD}                  {DIM}https://www.gnu.org/licenses/gpl-3.0.html{RESET}")
-    print(f"{BOLD}Copyright       : {FG_CYAN}(C) 2025 xiu{RESET}")
-    print(f"{BOLD}                  {FG_CYAN}https://github.com/xiuazo/tagWorker{RESET}")
-    print(f"{BOLD}                  {FG_WHITE}This is free software. You may modify and")
-    print(f"{BOLD}                  {FG_WHITE}redistribute it under the same license.{RESET}")
-    print("-" * 72)
-
-print_banner()
-
-
-# =========================================================================
-
-class TagWorker:
+class worker:
     instances = []
-    instance_reactions = {}
+    reacted = {}
 
     new_torrents = False
 
-    def __init__(self, qbit, name, config):
+    def __init__(self, name, config):
         self.id = uuid.uuid4()
-        self.client = qbit
+        self.client = qBit(config.url, config.user, config.password)
         self.config = config
         self.name = name or tldextract.extract(config['url']).domain
         self.commands = getattr(config, 'commands', None)
@@ -89,7 +46,7 @@ class TagWorker:
 
         self.tag_thread = self.disk_thread = None, None
 
-        self.__class__.instance_reactions[self] = False
+        self.__class__.reacted[self] = False
         self.__class__.instances.append(self)
 
     @classmethod
@@ -147,13 +104,13 @@ class TagWorker:
             if curr_torrents != prev_torrents:
                 logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need to check dupes")
                 # podria estar ya a true y con alguna instancia ya reaccionada. estas se lo podrian perder
-                __class__.instance_reactions = {key: False for key in __class__.instance_reactions}
+                __class__.reacted = {key: False for key in __class__.reacted}
 
             tags_changed = False
 
-            if GlobalConfig.get('app.dupes.enabled', False) and not __class__.instance_reactions[self]:
+            if GlobalConfig.get('app.dupes.enabled', False) and not __class__.reacted[self]:
                 tags_changed |= self.tag_dupes()
-                __class__.instance_reactions[self] = True
+                __class__.reacted[self] = True
 
             tag_funcs = {
                 'tag_trackers': self.tag_trackers,
@@ -165,11 +122,16 @@ class TagWorker:
                 'tag_HUNO': self.tag_HUNO,
             }
 
+            tags_changed = False
             for key, func in tag_funcs.items():
                 if commands.get(key, False):
                     changes = func()
                     if changes: logger.debug(f"{self.name:<10} - {key} made changes.")
                     tags_changed |= changes
+
+            if GlobalConfig.get('app.dupes.enabled', False) and not worker.reacted[self]:
+                tags_changed |= self.tag_dupes()
+                worker.reacted[self] = True
 
             tags_changed |= self.clean_noHL()
 
@@ -826,55 +788,3 @@ def wait_for_event(name, wait_event, logger_prefix):
         logger.debug(f"{logger_prefix:<10} - {name} completado")
 
 # ===========================================
-
-def startup_msg(config=None):
-    config = GlobalConfig.get()
-
-    print('')
-    logger.info(f"Platform        : {platform.system()} {platform.release()}")
-    logger.info(f"Python          : {platform.python_version()}")
-    logger.info(f"qBit clients    : {len(config.clients)}")
-
-    if config:
-        tracker_details = len(config.tracker_details)
-        logger.info(f"FullSync every  : {getattr(config.app, 'fullsync_interval', 'N/A')}")
-        logger.info(f"Refresh interval: {getattr(config.app, 'tagging_schedule_interval', 'N/A')}")
-        logger.info(f"Disk Schedule   : {getattr(config.app, 'disktasks_schedule_interval', 'N/A')}")
-        logger.info(f"Scan Dupes      : {getattr(config.app.dupes, 'enabled', 'disabled')}")
-        logger.info(f"Trackers        : {tracker_details}")
-    print('')
-
-def main():
-    logger.info(f"{'GLOBAL':<10} - Logger init")
-    logger.info(f"{'GLOBAL':<10} - Reading config file")
-
-    with open(CONFIG_FILE, "r") as f:
-        app_config = Config(yaml.safe_load(f))
-    GlobalConfig.set(app_config)
-
-    startup_msg()
-    # inits
-    for name, client in GlobalConfig.get("clients").items():
-        if not client.enabled:
-            continue
-        try:
-            qbit = qBit(client.url, client.user, client.password)
-            instance = TagWorker(qbit, name, client)
-            instance.run()
-        except Exception as e:
-            logger.critical(f"{name:<10} - {e} {str(e)}")
-
-    try:
-        while True:
-            time.sleep(1000)
-    except (KeyboardInterrupt, SystemExit):
-        for instance in TagWorker.get_instances():
-            try:
-                logger.info(f'%-10s - Stopping instance', instance.name)
-                instance.stop()
-            except Exception as e:
-                logger.error(f"%-10s - Unable to stop instance", instance.name)
-
-if __name__ == "__main__":
-
-    main()

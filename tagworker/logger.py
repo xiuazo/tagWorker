@@ -6,7 +6,7 @@ LEVEL=logging.DEBUG
 
 os.makedirs('logs', exist_ok=True)
 
-log_format = '%(asctime)s - [%(levelname)-8s] - [%(funcName)-15s] - %(message)s'
+log_format = '%(asctime)s - %(levelname)-8s - [%(funcName)-15s] - %(message)s'
 date_format = '%H:%M:%S'
 
 logger = logging.getLogger(__name__)
