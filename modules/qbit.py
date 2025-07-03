@@ -101,7 +101,10 @@ class qBit:
         self.store_torrents()
 
     def login(self):
-        pass
+        try:
+            self.client.auth_log_in()
+        except qbittorrentapi.LoginFailed as e:
+            raise
 
     def logout(self):
         pass

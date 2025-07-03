@@ -74,7 +74,7 @@ class TagWorker:
         self.translation_table = getattr(config, 'translation_table', None)
         self.share_limits = getattr(config, 'share_limits', None)
         self.dryrun = getattr(config, 'dryrun', True)
-        self.localinstance = getattr(config, 'local_instance', False)
+        self.local_client = getattr(config, 'local_instance', False)
 
         self.changes_dict = {}
         self._full_update_time = 0
@@ -87,8 +87,14 @@ class TagWorker:
         self.tag_idle.clear()
         self.disk_idle.set()
 
-        self.__class__.instances.append(self)
+        self.tag_thread = self.disk_thread = None, None
+
         self.__class__.instance_reactions[self] = False
+        self.__class__.instances.append(self)
+
+    @classmethod
+    def get_instances(self):
+        return self.instances
 
     def run(self):
         try:
@@ -96,14 +102,22 @@ class TagWorker:
             logger.info(f"{self.name:<10} - logged in")
         except Exception as e:
             logger.error(f"{self.name:<10} - unable to log in. client disabled. {e}")
-            return None, None
+            return
 
-        tag = threading.Thread(target=self.task_tag)
-        disk = threading.Thread(target=self.task_disk)
-        tag.start()
-        disk.start()
+        self.tag_thread = threading.Thread(target=self.task_tag)
+        self.tag_thread.start()
+        self.disk_thread = threading.Thread(target=self.task_disk)
+        self.disk_thread.start()
 
-        return tag, disk
+    def is_running(self):
+        return self.tag_thread & self.disk_thread
+
+    def stop(self):
+        self.stop_event.set()
+        self.tag_trigger.set()
+        self.client.logout()
+        if self.tag_thread: self.tag_thread.join()
+        if self.disk_thread: self.disk_thread.join()
 
     def torrents_changed(self, prop = None):
         # obtengo la informacion de los cambios de los torrents
@@ -133,13 +147,13 @@ class TagWorker:
             if curr_torrents != prev_torrents:
                 logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need to check dupes")
                 # podria estar ya a true y con alguna instancia ya reaccionada. estas se lo podrian perder
-                TagWorker.instance_reactions = {key: False for key in TagWorker.instance_reactions}
+                __class__.instance_reactions = {key: False for key in __class__.instance_reactions}
 
             tags_changed = False
 
-            if GlobalConfig.get('app.dupes.enabled', False) and not TagWorker.instance_reactions[self]:
+            if GlobalConfig.get('app.dupes.enabled', False) and not __class__.instance_reactions[self]:
                 tags_changed |= self.tag_dupes()
-                TagWorker.instance_reactions[self] = True
+                __class__.instance_reactions[self] = True
 
             tag_funcs = {
                 'tag_trackers': self.tag_trackers,
@@ -174,7 +188,7 @@ class TagWorker:
                 self.stop_event.wait(2) # delay para que qbit aplique cambios. no uso tag_trigger pq no quiero que disk_task lo arranque. es un delay interrumpible, sin mas
 
     def task_disk(self):
-        if not self.localinstance:
+        if not self.local_client:
             self.disk_idle.set()
             return
 
@@ -341,7 +355,7 @@ class TagWorker:
          - un torrent pertenece a una categoria fuera del scan
          - noHL está deshabilitado
         """
-        if not self.localinstance:
+        if not self.local_client:
             return False
         noHL_tag = GlobalConfig.get("app.noHL.tag")
         noHL_cats = GlobalConfig.get("app.noHL.categories")
@@ -839,7 +853,6 @@ def main():
     GlobalConfig.set(app_config)
 
     startup_msg()
-    threads = []
     # inits
     for name, client in GlobalConfig.get("clients").items():
         if not client.enabled:
@@ -847,33 +860,21 @@ def main():
         try:
             qbit = qBit(client.url, client.user, client.password)
             instance = TagWorker(qbit, name, client)
+            instance.run()
         except Exception as e:
             logger.critical(f"{name:<10} - {e} {str(e)}")
-        # engage!
-        try:
-            threads.extend(instance.run())
-        except Exception as e:
-            logger.error(f"{name:<10} - Failed to init instance: {e}")
 
-    # keep the main thread alive
     try:
         while True:
-            time.sleep(300)
+            time.sleep(1000)
     except (KeyboardInterrupt, SystemExit):
-        for instance in TagWorker.instances:
+        for instance in TagWorker.get_instances():
             try:
                 logger.info(f'%-10s - Stopping instance', instance.name)
-                instance.stop_event.set()
-                instance.tag_trigger.set()
-                instance.client.logout()
+                instance.stop()
             except Exception as e:
                 logger.error(f"%-10s - Unable to stop instance", instance.name)
 
-    for t in threads:
-        # comprobamos el tipo. si la instancia falló al loguear qbit, sus threads no existen y son None
-        if isinstance(t, threading.Thread):
-            t.join()
-
 if __name__ == "__main__":
-    # os.system("cls" if os.name == "nt" else "clear")
+
     main()
