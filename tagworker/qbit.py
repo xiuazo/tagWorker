@@ -21,83 +21,64 @@ class qBit:
     total_torrents = {}
 
     def __init__(self, url, user, pwd):
-        self._uid = uuid.uuid4()
-        self._url = url
-        self._user = user
-        self._pwd = pwd
+        self.__client = qbittorrentapi.Client(host=url, username=user, password=pwd)
+        self.__uid = uuid.uuid4()
 
-        self._prev_status = {} # estado anterior
-        self._changes = {} # diff
-        self._version = 0
-        self._full_update = False
-
-        # estado anterior + cambios. usar getter self.status()
-        self._status = {}
-
-        self.client = qbittorrentapi.Client(host=url, username=user, password=pwd)
+        self.__sync_data = None
+        self.__acumulado = {}
 
     @classmethod
-    def torrents(cls, uid = ''):
-        if uid:
-            return cls.total_torrents.get(uid, {})
-        return cls.total_torrents
-
-    @classmethod
-    def all_torrents_iterator(cls):
-        for uid, data in cls.total_torrents.items():
+    def all_torrents_iterator(self):
+        for uid, data in self.total_torrents.items():
             yield uid, data
 
-    def store_torrents(self):
-        qBit.total_torrents[self._uid] = self.torrents
+    @classmethod
+    def store_torrents(self, obj):
+        self.total_torrents[obj.id] = obj.torrents
+
+    @property
+    def id(self):
+        return self.__uid
+
+    @property
+    def client(self):
+        return self.__client
 
     @property
     def torrents(self):
-        return self._status.get('torrents', {})
+        return self.__acumulado.get('torrents', {})
 
     @property
-    def url(self):
-        return self._url
-
-    @property
-    def session(self):
-        return self._session
-
-    @property
-    def changes(self):
-        return self._changes
+    def sync_data(self):
+        return self.__sync_data
 
     @property
     def status(self):
-        return self._status
+        return self.__acumulado
 
     def sync(self, fullsync = False):
-        sync_data = self.client.sync.maindata(0 if fullsync else self._version)
+        if fullsync: self.client.sync.maindata.reset_rid()
+        sync_data = self.client.sync.maindata.delta()
 
-        self._version = sync_data.rid
-        self._changes = sync_data
-        self._full_update = sync_data.get("full_update")
+        self.__sync_data = sync_data
 
-        if self._full_update:
-            self._status = sync_data
-            self._prev_status = {}
+        if sync_data.get("full_update"):
+            self.__acumulado = sync_data
         elif sync_data:
-            self._prev_status = self._status
-
             # this would drags old and unexisting things...
-            self._status = deep_merge(self._prev_status, sync_data)
-            # ... if we don't clean
-            if 'tags' in sync_data:
-                self._status['tags'] = list(set(self._status['tags']) | set(sync_data['tags']))
-            if 'tags_removed' in sync_data:
-                self._status['tags'] = list(set(self._status['tags']) - set(sync_data['tags_removed']))
-            if 'categories' in sync_data:
-                self._status['categories'].update(sync_data['categories'])
-            if 'categories_removed' in sync_data:
-                self._status['categories'] = {cname:cval for cname, cval in self._status['categories'].items() if cname not in sync_data['categories_removed']}
+            self.__acumulado = deep_merge(self.__acumulado, sync_data)
+            # ... if we don't clean. but we don't care
+            # if 'tags' in sync_data:
+            #     self.__acumulado['tags'] = list(set(self.__acumulado['tags']) | set(sync_data['tags']))
+            # if 'tags_removed' in sync_data:
+            #     self.__acumulado['tags'] = list(set(self.__acumulado['tags']) - set(sync_data['tags_removed']))
+            # if 'categories' in sync_data:
+            #     self.__acumulado['categories'].update(sync_data['categories'])
+            # if 'categories_removed' in sync_data:
+            #     self.__acumulado['categories'] = {cname:cval for cname, cval in self.__acumulado['categories'].items() if cname not in sync_data['categories_removed']}
             if 'torrents_removed' in sync_data:
-                self._status['torrents'] = {th:tv for th, tv in self._status['torrents'].items() if th not in sync_data['torrents_removed']}
-
-        self.store_torrents()
+                self.__acumulado['torrents'] = {th:tv for th, tv in self.__acumulado['torrents'].items() if th not in sync_data['torrents_removed']}
+        __class__.store_torrents(self)
 
     def login(self):
         try:
@@ -105,20 +86,18 @@ class qBit:
         except qbittorrentapi.LoginFailed as e:
             raise
 
-    def logout(self):
-        pass
-
     def add_tags(self, hashes, tag):
         self.client.torrent_tags.add_tags(tag, hashes)
 
     def remove_tags(self, hashes, tags):
         self.client.torrent_tags.remove_tags(tags, hashes)
 
-    def get_torrent_files(self, thash):
+    # @property
+    def torrent_files(self, thash):
         files = self.client.torrents.files(thash)
 
         # Si es un archivo único, devuelve su ruta
-        torrent = self._status.get('torrents', {})[thash]
+        torrent = self.__acumulado.get('torrents', {})[thash]
         content_path = torrent.content_path
         if is_file(content_path):
             return {content_path}
@@ -155,8 +134,8 @@ class qBit:
 
 # =================================================================
 
-    def get_torrents(self):
-        return self.client.torrents_info()
+    # def get_torrents(self):
+    #     return self.client.torrents_info()
 
     def get_trackers(self, thash):
         return self.client.torrents.trackers(thash)

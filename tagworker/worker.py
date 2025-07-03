@@ -78,10 +78,10 @@ class worker:
 
     def torrents_changed(self, prop = None):
         # obtengo la informacion de los cambios de los torrents
-        changed_t = self.client.changes.get('torrents', {})
+        changed_t = self.client.sync_data.get('torrents', {})
         # ahora filtro los que no han tenido cambios que nos importen
         watched_props = [prop] if isinstance(prop, str) else prop
-        all_torrents = self.client.status.get('torrents', {})
+        all_torrents = self.client.torrents
         return {th: all_torrents[th] for th, tv in changed_t.items() if not watched_props or (watched_props & tv.keys())}
 
     def task_tag(self):
@@ -92,15 +92,16 @@ class worker:
             wait_for_event("disk_done", self.disk_idle, self.name)
             self.tag_idle.clear()
 
-            prev_torrents = set(self.client.status.get('torrents', {}).keys())
+            prev_torrents = set(self.client.torrents.keys())
 
             request_fullsync = time.time() - self._full_update_time > parse(GlobalConfig.get('app.fullsync_interval'))
             self.client.sync(request_fullsync)
             if request_fullsync:
                 logger.info("%-10s - SYNCING WITH FULL DATA", self.name)
                 self._full_update_time = time.time()
+            #logger.debug(f"{self.name:<10} - --> {len(self.client.sync_data.get('torrents'))} changed")
 
-            curr_torrents = set(self.client.status.get('torrents', {}).keys())
+            curr_torrents = set(self.client.torrents.keys())
             if curr_torrents != prev_torrents:
                 logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need to check dupes")
                 # podria estar ya a true y con alguna instancia ya reaccionada. estas se lo podrian perder
@@ -147,7 +148,7 @@ class worker:
                 self.tag_trigger.clear()
             else:
                 logger.debug(f"{self.name:<10} - changes have been made. looping...")
-                self.stop_event.wait(2) # delay para que qbit aplique cambios. no uso tag_trigger pq no quiero que disk_task lo arranque. es un delay interrumpible, sin mas
+                self.stop_event.wait(1) # delay para que qbit aplique cambios. no uso tag_trigger pq no quiero que disk_task lo arranque. es un delay interrumpible, sin mas
 
     def task_disk(self):
         if not self.local_client:
@@ -194,9 +195,9 @@ class worker:
 
         # Forma el set con todos los archivos de todos los torrents
         referenced_files = set()
-        torrents = self.client.status.get('torrents', {})
+        torrents = self.client.torrents
         for thash in torrents.keys():
-            files = self.client.get_torrent_files(thash) # no normalizado
+            files = self.client.torrent_files(thash) # no normalizado
             referenced_files.update(files)
         referenced_files = {translate_path(f, self.translation_table) for f in referenced_files}
 
@@ -266,7 +267,7 @@ class worker:
         #
         # en caso de multifile miraremos fichero a fichero sus contenidos hasta encontrar alguno que si tenga HL fuera
         raiz = self.folders.get('root_path')
-        torrents = self.client.status.get('torrents', {})
+        torrents = self.client.torrents
         translation_table = self.translation_table
 
         if torrents:
@@ -368,14 +369,14 @@ class worker:
         torrents = set()
         multiple_instances = False
         for uid, tset in qBit.all_torrents_iterator():
-            if uid == self.client._uid: continue # my torrents are not dupes!
+            if uid == self.client.id: continue # my torrents are not dupes!
             torrents.update(tset.keys())
             multiple_instances = True
         if not multiple_instances:
             logger.warning(f"{self.name:<10} - no other clients. skipping dupe tagging")
             return False
 
-        my_torrents = self.client.status.get('torrents', {})
+        my_torrents = self.client.torrents
         my_hashes = set(my_torrents.keys())
         dupes = torrents & my_hashes
 
@@ -590,7 +591,7 @@ class worker:
         client = self.client
         tags_to_rename = GlobalConfig.get("app.tag_renamer")
         # obtengo la informacion de los cambios de los torrents
-        changed_t = client.changes.get('tags', {}) & tags_to_rename.keys()
+        changed_t = client.sync_data.get('tags', {}) & tags_to_rename.keys()
 
         if not changed_t:
             # logger.debug(f'%-10s - no tags to rename', self.name)
@@ -598,11 +599,10 @@ class worker:
 
         logger.info(f'%-10s - {changed_t} must be renamed.', self.name)
 
-        torrents = client.status.get('torrents', {})
         for old_tag, new_tag in tags_to_rename.items():
             if old_tag not in changed_t:
                 continue
-            hashes = {th for th, tv in torrents.items() if old_tag in tv.get('tags','').split(", ")}
+            hashes = {th for th, tv in client.torrents.items() if old_tag in tv.get('tags').split(", ")}
             client.add_tags(hashes, new_tag)
 
         self.client.delete_tags(tags_to_rename.keys()) # FIXME
@@ -685,7 +685,7 @@ class worker:
             profiles_dict[profile_name] = set()
             tagdict[tagname] = set()
 
-        torrents = {thash : self.client.status.get('torrents', {}).get(thash) for thash in torrentset}
+        torrents = {thash : self.client.torrents.get(thash) for thash in torrentset}
 
         for thash, tval in torrents.items():
             if not tval:
