@@ -84,11 +84,10 @@ def main():
     except (KeyboardInterrupt, SystemExit):
         for instance in worker.get_instances():
             try:
-                logger.info(f'%-10s - Stopping instance', instance.name)
+                logger.info(f"{instance.name:<10} - Stopping...")
                 instance.stop()
             except Exception as e:
-                logger.error(f"%-10s - Unable to stop instance", instance.name)
+                logger.error(f"{instance.name:<10}- Error stopping: {e}")
 
 if __name__ == "__main__":
-
     main()

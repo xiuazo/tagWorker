@@ -86,6 +86,9 @@ class qBit:
         except qbittorrentapi.LoginFailed as e:
             raise
 
+    def logout(self):
+        self.client.auth_log_out()
+
     def add_tags(self, hashes, tag):
         self.client.torrent_tags.add_tags(tag, hashes)
 
