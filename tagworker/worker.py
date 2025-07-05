@@ -170,7 +170,7 @@ class worker:
                     tagged = self.disk_noHL()
                 if commands.get('clean_orphaned'):
                     # logger.info(f"{self.name:<10} - moving orphan files")
-                    self.disk_clean_orphans(dry_run)
+                    self.disk_orphans(dry_run)
 
                 if commands.get('prune_orphaned'):
                     # logger.info(f"{self.name:<10} - pruning old orphans")
@@ -189,15 +189,17 @@ class worker:
                 self.tag_trigger.set()
             self.stop_event.wait(timeout=parse(GlobalConfig.get("app.disktasks_schedule_interval")))
 
-    def disk_clean_orphans(self, dry_run = True):
+    def disk_orphans(self, dry_run = True):
         root_path = self.folders.get('root_path')
         orphan_path = self.folders.get('orphaned_path')
 
         # Forma el set con todos los archivos de todos los torrents
         referenced_files = set()
         torrents = self.client.torrents
-        for thash in torrents.keys():
+        for thash, torrent in torrents.items():
             files = self.client.torrent_files(thash) # no normalizado
+            if referenced_files & files:
+                logger.warning(f"{self.name:<10} - Tracker-dupe? {torrent.name} ({tldextract.extract(torrent.tracker).domain}) files belong to multiple torrents")
             referenced_files.update(files)
         referenced_files = {translate_path(f, self.translation_table) for f in referenced_files}
 
@@ -421,6 +423,8 @@ class worker:
                     working = True
                     break
                 else: errormsg = tracker.get('msg')
+            # errormsg = ''
+            # working = torrent.get('tracker')
             if not working:
                 if errortag not in ttags:
                     errored.add(thash)
