@@ -1,5 +1,6 @@
 import os
 import time
+from collections import defaultdict
 from .logger import logger
 
 def is_file(content_path):
@@ -31,7 +32,7 @@ def move_to_dir(root_path, orphaned_path, file):
         logger.info(f"Path for {file} not in {root_path}")
 
 def build_inode_map(path):
-    inode_map = {}
+    inode_map = defaultdict(int)
 
     for dirpath, _, filenames in os.walk(path):
         for name in filenames:
@@ -39,30 +40,18 @@ def build_inode_map(path):
             try:
                 stat_path = os.stat(fullpath)
                 inode = stat_path.st_ino
-
-                if stat_path.st_nlink == 1:
-                    continue
-                if inode in inode_map:
-                    inode_map[inode].append(fullpath)
-                else:
-                    inode_map[inode] = [fullpath]
+                inode_map[inode] += 1
             except FileNotFoundError:
                 pass
-
     return inode_map
 
-def verificar_hardlinks(target_file, inode_map):
+def file_has_outer_links(path, inode_map):
     try:
-        target_stat = os.stat(target_file)
-        target_inode = target_stat.st_ino
-        target_st_nlink = target_stat.st_nlink
-
-        if target_inode in inode_map and len(inode_map[target_inode]) < target_st_nlink:
-                return True
-        return False
-
+        stat = os.stat(path)
+        in_count = inode_map[stat.st_ino]
+        return stat.st_nlink > in_count
     except FileNotFoundError:
-        return "File not found."
+        return False
 
 def remove_empty_dirs(path, dryrun=True, iname=''):
     # $ find $ROOT_FOLDER -type d -empty -delete

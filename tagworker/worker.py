@@ -13,7 +13,7 @@ from pytimeparse2 import parse
 from .config import GlobalConfig
 from .logger import logger
 from .qbit import qBit
-from .files import move_to_dir, is_file, build_inode_map, verificar_hardlinks, translate_path, remove_empty_dirs
+from .files import move_to_dir, is_file, build_inode_map, file_has_outer_links, translate_path, remove_empty_dirs
 
 class worker:
     instances = []
@@ -268,43 +268,42 @@ class worker:
         # si tiene HL fuera, el fichero deberia tener una cantidad de links superior a los que hemos encontrado
         #
         # en caso de multifile miraremos fichero a fichero sus contenidos hasta encontrar alguno que si tenga HL fuera
-        raiz = self.folders.get('root_path')
-        torrents = self.client.torrents
-        translation_table = self.translation_table
+        def torrent_has_HL(torrent, inode_map, translation_table):
+            realfile = translate_path(torrent.content_path, translation_table)
+            if is_file(realfile):
+                return file_has_outer_links(realfile, inode_map)
+            # FIXME iterar contenidos del content_path. si hay algun HL lo damos por bueno
+            for root, _, files in os.walk(translate_path(torrent.content_path, translation_table)):
+                for file in files:
+                    realfile = translate_path(file, translation_table)
+                    fullpath = os.path.join(root, realfile)
+                    if file_has_outer_links(fullpath, inode_map):
+                        return True
+            return False
 
-        if torrents:
-            inodo_mapa = build_inode_map(raiz)
-        noHLs, addtag, deltag = set(), set(), set()
+        root_path = self.folders.get('root_path')
+        translation_table = self.translation_table
         noHL_tag = GlobalConfig.get("app.noHL.tag")
         noHL_cats = GlobalConfig.get("app.noHL.categories")
+
+        torrents = self.client.torrents
+        if not torrents:
+            return False
+        inode_map = build_inode_map(root_path)
+        noHLs, addtag, deltag = set(), set(), set()
         for thash, torrent in torrents.items():
-            tagged = noHL_tag in torrent['tags'].split(", ")
-            if torrent['category'] not in noHL_cats:
+            if torrent.category not in noHL_cats:
                 continue
 
-            file = torrent['content_path']
-            realfile = translate_path(file, translation_table)
-            if not is_file(realfile):
-                # FIXME iterar contenidos del content_path. si hay algun HL lo damos por bueno
-                resultado = False
-                for root, _, files in os.walk(translate_path(torrent['content_path'], translation_table)):
-                    for file in files:
-                        realfile = translate_path(file, translation_table)
-                        ruta_archivo = os.path.join(root, realfile)
-                        if verificar_hardlinks(ruta_archivo, inodo_mapa):
-                            resultado = True
-                            break
-                    if resultado:
-                        break
-            else:
-                resultado = verificar_hardlinks(realfile, inodo_mapa)
-            if not resultado:
+            tagged = noHL_tag in torrent.tags.split(", ")
+
+            if not torrent_has_HL(torrent, inode_map, translation_table):
                 noHLs.add(thash)
                 if not tagged:
-                    logger.info(f"{self.name:<10} - new noHL: {torrent.get('name')}")
+                    logger.info(f"{self.name:<10} - new noHL: {torrent.name}")
                     addtag.add(thash)
             elif tagged:
-                logger.info(f"{self.name:<10} - {torrent.get('name')} has links now.")
+                logger.info(f"{self.name:<10} - {torrent.name} has links now.")
                 deltag.add(thash)
 
         if addtag: self.client.add_tags(addtag, noHL_tag)
@@ -416,15 +415,15 @@ class worker:
                     unerrored.add(thash)
                 continue
             response = self.client.get_trackers(thash)
-            working = False
-            errormsg = ""
-            for tracker in response:
-                if tracker.get('status') not in {0,4}:
-                    working = True
-                    break
-                else: errormsg = tracker.get('msg')
-            # errormsg = ''
-            # working = torrent.get('tracker')
+            # working = False
+            # errormsg = ""
+            # for tracker in response:
+            #     if tracker.get('status') not in {0,4}:
+            #         working = True
+            #         break
+            #     else: errormsg = tracker.get('msg')
+            errormsg = ''
+            working = torrent.get('tracker')
             if not working:
                 if errortag not in ttags:
                     errored.add(thash)
