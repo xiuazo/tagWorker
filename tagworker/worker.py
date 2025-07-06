@@ -15,13 +15,16 @@ from .logger import logger
 from .qbit import qBit
 from .files import move_to_dir, is_file, build_inode_map, file_has_outer_links, translate_path, remove_empty_dirs
 
+METHOD_API = 0
+METHOD_DICT = 1
+
 class worker:
     instances = []
     reacted = {}
 
     new_torrents = False
 
-    def __init__(self, name, config):
+    def __init__(self, name, config, trackerissue_method = METHOD_API):
         self.id = uuid.uuid4()
         self.client = qBit(config.url, config.user, config.password)
         self.config = config
@@ -32,6 +35,7 @@ class worker:
         self.share_limits = getattr(config, 'share_limits', None)
         self.dryrun = getattr(config, 'dryrun', True)
         self.local_client = getattr(config, 'local_instance', False)
+        self.trackerissue_method = trackerissue_method
 
         self.changes_dict = {}
         self._full_update_time = 0
@@ -148,7 +152,7 @@ class worker:
                 self.tag_trigger.clear()
             else:
                 logger.debug(f"{self.name:<10} - changes have been made. looping...")
-                self.stop_event.wait(1) # delay para que qbit aplique cambios. no uso tag_trigger pq no quiero que disk_task lo arranque. es un delay interrumpible, sin mas
+                self.stop_event.wait(2) # delay para que qbit aplique cambios. no uso tag_trigger pq no quiero que disk_task lo arranque. es un delay interrumpible, sin mas
 
     def task_disk(self):
         if not self.local_client:
@@ -197,6 +201,7 @@ class worker:
         referenced_files = set()
         torrents = self.client.torrents
         for thash, torrent in torrents.items():
+            # TODO: intense!
             files = self.client.torrent_files(thash) # no normalizado
             if referenced_files & files:
                 logger.warning(f"{self.name:<10} - Tracker-dupe? {torrent.name} ({tldextract.extract(torrent.tracker).domain}) files belong to multiple torrents")
@@ -414,16 +419,18 @@ class worker:
                 if errortag in ttags:
                     unerrored.add(thash)
                 continue
-            response = self.client.get_trackers(thash)
-            # working = False
-            # errormsg = ""
-            # for tracker in response:
-            #     if tracker.get('status') not in {0,4}:
-            #         working = True
-            #         break
-            #     else: errormsg = tracker.get('msg')
-            errormsg = ''
-            working = torrent.get('tracker')
+            if self.trackerissue_method == METHOD_API:
+                response = self.client.get_trackers(thash)
+                working = False
+                errormsg = ""
+                for tracker in response:
+                    if tracker.get('status') not in {0,4}:
+                        working = True
+                        break
+                    else: errormsg = tracker.get('msg')
+            else:
+                errormsg = ''
+                working = torrent.get('tracker')
             if not working:
                 if errortag not in ttags:
                     errored.add(thash)
@@ -690,15 +697,15 @@ class worker:
 
         torrents = {thash : self.client.torrents.get(thash) for thash in torrentset}
 
-        for thash, tval in torrents.items():
-            if not tval:
+        for thash, torrent in torrents.items():
+            if not torrent:
                 logger.warning(f"{self.name:<10} - skipping hash {thash}. ")
                 continue
-            tags = tval.get('tags',{}).split(", ")
+            tags = torrent.tags.split(", ")
             # find matching profile
             for profile_name, profile_config in profiles.items():
                 if (
-                    ('category' in profile_config and not any(cat == tval['category'] for cat in profile_config['category']))
+                    ('category' in profile_config and not any(cat == torrent.category for cat in profile_config['category']))
                     or ('include_all_tags' in profile_config and not all(tag in tags for tag in profile_config['include_all_tags']))
                     or ('include_any_tags' in profile_config and not any(tag in tags for tag in profile_config['include_any_tags']))
                     or ('exclude_all_tags' in profile_config and all(tag in tags for tag in profile_config['exclude_all_tags']))
@@ -717,12 +724,12 @@ class worker:
         for sltag, hashes in tagdict.items():
             for thash in hashes:
                 torrent = torrents[thash]
-                torrenttags = set(torrent.get('tags', '').split(", "))
+                torrenttags = set(torrent.tags.split(", "))
                 if sltag not in torrenttags:
                     logger.debug(f"{self.name:<10} - adding tag {sltag} to {torrent.get('name')}")
                     addtag[sltag].add(thash)
         for thash, torrent in torrents.items():
-            sltags = set(torrent.get('tags', '').split(", ")) & set(tagdict.keys()) # tags relativos a sharelimits
+            sltags = set(torrent.tags.split(", ")) & set(tagdict.keys()) # tags relativos a sharelimits
             for sltag in sltags:
                 if thash not in tagdict[sltag]:
                     logger.debug(f"{self.name:<10} - removing tag {sltag} from {torrent.get('name')}")

@@ -2,7 +2,7 @@ import sys
 import platform
 import time
 
-from tagworker import CONFIG_FILE
+from tagworker import CONFIG_FILE, TRACKERISSUE_METHOD
 from .logger import logger
 from .config import Config, GlobalConfig
 from .worker import worker
@@ -72,7 +72,7 @@ def main():
         if not client.enabled:
             continue
         try:
-            instance = worker(name, client)
+            instance = worker(name, client, TRACKERISSUE_METHOD)
             instance.run()
         except Exception as e:
             logger.critical(f"{name:<10} - {e} {str(e)}")
