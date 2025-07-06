@@ -197,29 +197,34 @@ class worker:
         root_path = self.folders.get('root_path')
         orphan_path = self.folders.get('orphaned_path')
 
-        # Forma el set con todos los archivos de todos los torrents
-        referenced_files = set()
-        torrents = self.client.torrents
-        for thash, torrent in torrents.items():
-            # TODO: intense!
-            files = self.client.torrent_files(thash) # no normalizado
-            if referenced_files & files:
-                logger.warning(f"{self.name:<10} - Tracker-dupe? {torrent.name} ({tldextract.extract(torrent.tracker).domain}) files belong to multiple torrents")
-            referenced_files.update(files)
-        referenced_files = {translate_path(f, self.translation_table) for f in referenced_files}
-
-        # Recorre el árbol de directorios y excluye el directorio de huerfanos
+        # Recorre el directorio de descargas, excluyendo el de huerfanos
         hd_files = set()
         for root, dirs, files in os.walk(root_path):
             if root_path.startswith(orphan_path):
                 dirs[:] = []
             else:
-                # Exclusion
                 dirs[:] = [d for d in dirs if not os.path.join(root, d).startswith(orphan_path)]
 
             for file in files:
                 ruta_archivo = os.path.join(root, file)
                 hd_files.add(ruta_archivo)
+
+        # Forma el set con todos los archivos de todos los torrents
+        referenced_files = set()
+        torrents = self.client.torrents
+        for thash, torrent in torrents.items():
+            translated = translate_path(torrent.content_path, self.translation_table)
+            if os.path.isfile(translated):
+                files = {translated}
+            elif os.path.isdir(translated):
+                files = self.client.torrent_files(thash)
+                files = {translate_path(file, self.translation_table) for file in files}
+            else: # no existe el translated en el disco => errored/missing files torrent o descarga incompleta
+                # TODO: torrent.state checks, error torrent tagging... ?
+                logger.warning(f"Missing file: {torrent.name} - {translated}")
+            if referenced_files & files:
+                logger.warning(f"{self.name:<10} - Tracker-dupe? {torrent.name} ({tldextract.extract(torrent.tracker).domain}) files belong to multiple torrents")
+            referenced_files.update(files)
 
         # Calcula los archivos huérfanos
         orphaned_files = hd_files - referenced_files
@@ -353,7 +358,7 @@ class worker:
         tag = GlobalConfig.get("app.lowseeds.tag")
         min_seeds = GlobalConfig.get("app.lowseeds.min_seeds")
         for thash, torrent in torrents.items():
-            tags = torrent.get('tags').split(', ')
+            tags = torrent.tags.split(', ')
             seeds = torrent.get('num_complete')
             if torrent.get('state','') in ['pausedUP','pausedDL', 'error', 'unknown']: # filtramos solos los que estan normal XD
                 continue
@@ -414,7 +419,7 @@ class worker:
         errored, unerrored = set(), set()
         errortag = GlobalConfig.get("app.issue.tag")
         for thash, torrent in torrents.items():
-            ttags = torrent.get('tags').split(", ")
+            ttags = torrent.tags.split(", ")
             if torrent.get('state') in ['pausedUP','pausedDL', 'error', 'unknown']:
                 if errortag in ttags:
                     unerrored.add(thash)
@@ -470,7 +475,7 @@ class worker:
         for thash, torrent in torrents.items():
             seeding_time = torrent['seeding_time']
             torrent_ratio = torrent['ratio']
-            torrent_tags = torrent.get('tags', '').split(", ")
+            torrent_tags = torrent.tags.split(", ")
 
             for key, rules in tracker_rules.items():
                 if any(word in torrent['tracker'] for word in key.split("|")):
@@ -612,7 +617,7 @@ class worker:
         for old_tag, new_tag in tags_to_rename.items():
             if old_tag not in changed_t:
                 continue
-            hashes = {th for th, tv in client.torrents.items() if old_tag in tv.get('tags').split(", ")}
+            hashes = {th for th, tv in client.torrents.items() if old_tag in tv.tags.split(", ")}
             client.add_tags(hashes, new_tag)
 
         self.client.delete_tags(tags_to_rename.keys()) # FIXME
@@ -639,7 +644,7 @@ class worker:
             torrent_tracker = torrent.get('tracker')
             if not torrent_tracker: continue
             good_tags, bad_tags = set(), set()
-            torrent_tags = set(torrent.get('tags', '').split(", "))
+            torrent_tags = set(torrent.tags.split(", "))
 
             torrent_classified = False
             for expr, value in tracker_details.items():
