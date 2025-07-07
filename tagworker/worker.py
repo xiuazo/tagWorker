@@ -422,7 +422,7 @@ class worker:
         errored, unerrored = set(), set()
         errortag = GlobalConfig.get("app.issue.tag")
         for thash, torrent in torrents.items():
-            ttags = torrent.tags.split(", ")
+            ttags = torrent.get("tags", "").split(", ")
             if torrent.get('state') in ['pausedUP','pausedDL', 'error', 'unknown']:
                 if errortag in ttags:
                     unerrored.add(thash)
@@ -478,7 +478,7 @@ class worker:
         for thash, torrent in torrents.items():
             seeding_time = torrent['seeding_time']
             torrent_ratio = torrent['ratio']
-            torrent_tags = torrent.tags.split(", ")
+            torrent_tags = torrent.get("tags", "").split(", ")
 
             for key, rules in tracker_rules.items():
                 if any(word in torrent['tracker'] for word in key.split("|")):
@@ -647,7 +647,7 @@ class worker:
             torrent_tracker = torrent.get('tracker')
             if not torrent_tracker: continue
             good_tags, bad_tags = set(), set()
-            torrent_tags = set(torrent.tags.split(", "))
+            torrent_tags = set(torrent.get("tags", "").split(", "))
 
             torrent_classified = False
             for expr, value in tracker_details.items():
@@ -709,7 +709,7 @@ class worker:
             if not torrent:
                 logger.warning(f"{self.name:<10} - skipping hash {thash}. ")
                 continue
-            tags = torrent.tags.split(", ")
+            tags = torrent.get("tags", "").split(", ")
             # find matching profile
             for profile_name, profile_config in profiles.items():
                 if (
