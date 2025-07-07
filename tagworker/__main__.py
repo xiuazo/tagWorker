@@ -6,6 +6,7 @@ from tagworker import CONFIG_FILE, TRACKERISSUE_METHOD
 from .logger import logger
 from .config import Config, GlobalConfig
 from .worker import worker
+from .locker import acquire_lock, LockAcquisitionError
 
 def print_banner(version="0.0.1"):
     # ANSI codes
@@ -60,8 +61,14 @@ def startup_msg(config=None):
 
 def main():
     print_banner()
-    logger.info(f"{'GLOBAL':<10} - Logger init")
-    logger.info(f"{'GLOBAL':<10} - Reading config file")
+    logger.info(f"{'APP':<10} - Logger init")
+    logger.info(f"{'APP':<10} - Reading config file")
+
+    try:
+        lock_file = acquire_lock(CONFIG_FILE)
+    except LockAcquisitionError as e:
+        logger.critical(f"{'APP':<10} - Ya hay otra instancia usando configuración equivalente: {CONFIG_FILE}")
+        sys.exit(1)
 
     app_config = Config(CONFIG_FILE)
     GlobalConfig.set(app_config)

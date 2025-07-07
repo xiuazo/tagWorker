@@ -4,3 +4,4 @@ pyyaml
 tldextract
 bencodepy
 qbittorrent-api
+portalocker
