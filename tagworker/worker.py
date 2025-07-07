@@ -107,18 +107,6 @@ class worker:
                 self._full_update_time = time.time()
             #logger.debug(f"{self.name:<10} - --> {len(self.client.sync_data.get('torrents'))} changed")
 
-            curr_torrents = set(self.client.torrents.keys())
-            if curr_torrents != prev_torrents:
-                logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need to check dupes")
-                # podria estar ya a true y con alguna instancia ya reaccionada. estas se lo podrian perder
-                __class__.reacted = {key: False for key in __class__.reacted}
-
-            tags_changed = False
-
-            if GlobalConfig.get('app.dupes.enabled', False) and not __class__.reacted[self]:
-                tags_changed |= self.tag_dupes()
-                __class__.reacted[self] = True
-
             tag_funcs = {
                 'tag_trackers': self.tag_trackers,
                 'tag_HR': self.tag_HR,
@@ -136,9 +124,19 @@ class worker:
                     if changes: logger.debug(f"{self.name:<10} - {key} made changes.")
                     tags_changed |= changes
 
-            if GlobalConfig.get('app.dupes.enabled', False) and not worker.reacted[self]:
-                tags_changed |= self.tag_dupes()
-                worker.reacted[self] = True
+            curr_torrents = set(self.client.torrents.keys())
+            if curr_torrents != prev_torrents:
+                logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need to check dupes")
+                # podria estar ya a true y con alguna instancia ya reaccionada. estas se lo podrian perder
+                __class__.reacted = {key: False for key in __class__.reacted}
+
+            # si el usuario quiere, si han habido novedades desde el ultimo scan
+            # ... y si el resto de instancias estan ya pobladas!
+            # tag_dupes devuelve None si no encuentra ningun otro cliente poblado
+            if GlobalConfig.get('app.dupes.enabled', False) and not __class__.reacted[self]:
+                result = self.tag_dupes()
+                __class__.reacted[self] = bool(result is not None)
+                tags_changed |= bool(result)
 
             tags_changed |= self.clean_noHL()
 
@@ -381,9 +379,12 @@ class worker:
 
         torrents = set()
         multiple_instances = False
-        for uid, tset in qBit.all_torrents_iterator():
-            if uid == self.client.id: continue # my torrents are not dupes!
-            torrents.update(tset.keys())
+        for instance in qBit.all_instances_iterator():
+            if not instance.synced:
+                logger.warning(f"{self.name:<10} - not all clients are synced. skipping dupe tagging")
+                return None
+            elif instance.id == self.client.id: continue # my torrents are not dupes!
+            torrents.update(instance.torrents.keys())
             multiple_instances = True
         if not multiple_instances:
             logger.warning(f"{self.name:<10} - no other clients. skipping dupe tagging")

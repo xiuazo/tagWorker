@@ -18,27 +18,30 @@ def deep_merge(target, source):
     return target
 
 class qBit:
-    total_torrents = {}
+    instances = set()
 
     def __init__(self, url, user, pwd):
         self.__client = qbittorrentapi.Client(host=url, username=user, password=pwd)
         self.__uid = uuid.uuid4()
 
+        self.__rid = None
         self.__sync_data = None
-        self.__acumulado = {}
+        self.__state = dict()
+        __class__.instances.add(self)
 
     @classmethod
-    def all_torrents_iterator(self):
-        for uid, data in self.total_torrents.items():
-            yield uid, data
-
-    @classmethod
-    def store_torrents(self, obj):
-        self.total_torrents[obj.id] = obj.torrents
+    def all_instances_iterator(self):
+        for instance in self.instances:
+            yield instance
+            # yield instance.id, instance.torrents
 
     @property
     def id(self):
         return self.__uid
+
+    @property
+    def synced(self):
+        return self.__rid is not None
 
     @property
     def client(self):
@@ -46,7 +49,7 @@ class qBit:
 
     @property
     def torrents(self):
-        return self.__acumulado.get('torrents', {})
+        return self.__state.get('torrents', {})
 
     @property
     def sync_data(self):
@@ -54,20 +57,30 @@ class qBit:
 
     @property
     def status(self):
-        return self.__acumulado
+        return self.__state
 
     def sync(self, fullsync = False):
         if fullsync: self.client.sync.maindata.reset_rid()
         sync_data = self.client.sync.maindata.delta()
 
+        self.__rid = sync_data.rid
+        full_update = sync_data.get("full_update", False)
+        # torrents = sync_data.get("torrents", {})
+        torrents_removed = sync_data.get("torrents_removed", {})
+        # categories = sync_data.get("categories", {})
+        # categories_removed = sync_data.get("categories_removed", {})
+        # tags = sync_data.get("tags", {})
+        # tags_removed = sync_data.get("tags_removed", {})
+        # server_state = sync_data.server_state
+        # trackers = sync_data.get("trackers")
+
         self.__sync_data = sync_data
 
-        if sync_data.get("full_update"):
-            self.__acumulado = sync_data
+        if full_update:
+            self.__state = sync_data
         elif sync_data:
-            # this would drags old and unexisting things...
-            self.__acumulado = deep_merge(self.__acumulado, sync_data)
-            # ... if we don't clean. but we don't care
+            # this drags obsolete data unless we clean. but we only care about torrents
+            self.__state = deep_merge(self.__state, sync_data)
             # if 'tags' in sync_data:
             #     self.__acumulado['tags'] = list(set(self.__acumulado['tags']) | set(sync_data['tags']))
             # if 'tags_removed' in sync_data:
@@ -76,9 +89,8 @@ class qBit:
             #     self.__acumulado['categories'].update(sync_data['categories'])
             # if 'categories_removed' in sync_data:
             #     self.__acumulado['categories'] = {cname:cval for cname, cval in self.__acumulado['categories'].items() if cname not in sync_data['categories_removed']}
-            if 'torrents_removed' in sync_data:
-                self.__acumulado['torrents'] = {th:tv for th, tv in self.__acumulado['torrents'].items() if th not in sync_data['torrents_removed']}
-        __class__.store_torrents(self)
+            for thash in torrents_removed:
+                self.__state['torrents'].pop(thash, None)
 
     def login(self):
         try:
@@ -100,7 +112,7 @@ class qBit:
         files = self.client.torrents.files(thash)
 
         # Si es un archivo único, devuelve su ruta
-        torrent = self.__acumulado.get('torrents', {})[thash]
+        torrent = self.__state.get('torrents', {})[thash]
         content_path = torrent.content_path
         if is_file(content_path):
             return {content_path}
