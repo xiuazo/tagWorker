@@ -48,7 +48,7 @@ class worker:
         self.tag_idle.clear()
         self.disk_idle.set()
 
-        self.tag_thread = self.disk_thread = None, None
+        self.tag_thread = self.disk_thread = None
 
         self.__class__.reacted[self] = False
         self.__class__.instances.append(self)
@@ -56,6 +56,10 @@ class worker:
     @classmethod
     def get_instances(self):
         return self.instances
+
+    @property
+    def is_running(self):
+        return bool(self.tag_thread or self.disk_thread)
 
     def run(self):
         try:
@@ -70,15 +74,13 @@ class worker:
         self.disk_thread = threading.Thread(target=self.task_disk)
         self.disk_thread.start()
 
-    def is_running(self):
-        return self.tag_thread & self.disk_thread
-
     def stop(self):
         self.stop_event.set()
         self.tag_trigger.set()
         self.client.logout()
         if self.tag_thread: self.tag_thread.join()
         if self.disk_thread: self.disk_thread.join()
+        self.tag_thread = self.disk_thread = None
 
     def torrents_changed(self, prop = None):
         # obtengo la informacion de los cambios de los torrents
