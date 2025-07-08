@@ -737,7 +737,7 @@ class worker:
                     logger.debug(f"{self.name:<10} - adding tag {sltag} to {torrent.get('name')}")
                     addtag[sltag].add(thash)
         for thash, torrent in torrents.items():
-            sltags = set(torrent.tags.split(", ")) & set(tagdict.keys()) # tags relativos a sharelimits
+            sltags = set(torrent.get("tags","").split(", ")) & set(tagdict.keys()) # tags relativos a sharelimits
             for sltag in sltags:
                 if thash not in tagdict[sltag]:
                     logger.debug(f"{self.name:<10} - removing tag {sltag} from {torrent.get('name')}")
