@@ -358,7 +358,7 @@ class worker:
         tag = GlobalConfig.get("app.lowseeds.tag")
         min_seeds = GlobalConfig.get("app.lowseeds.min_seeds")
         for thash, torrent in torrents.items():
-            tags = torrent.tags.split(', ')
+            tags = torrent.get("tags", "").split(", ")
             seeds = torrent.get('num_complete')
             if torrent.get('state','') in ['pausedUP','pausedDL', 'error', 'unknown']: # filtramos solos los que estan normal XD
                 continue
@@ -620,7 +620,7 @@ class worker:
         for old_tag, new_tag in tags_to_rename.items():
             if old_tag not in changed_t:
                 continue
-            hashes = {th for th, tv in client.torrents.items() if old_tag in tv.tags.split(", ")}
+            hashes = {th for th, tv in client.torrents.items() if old_tag in tv.get("tags", "").split(", ")}
             client.add_tags(hashes, new_tag)
 
         self.client.delete_tags(tags_to_rename.keys()) # FIXME
@@ -713,7 +713,7 @@ class worker:
             # find matching profile
             for profile_name, profile_config in profiles.items():
                 if (
-                    ('category' in profile_config and not any(cat == torrent.category for cat in profile_config['category']))
+                    ('category' in profile_config and not any(cat == torrent.get('category') for cat in profile_config['category']))
                     or ('include_all_tags' in profile_config and not all(tag in tags for tag in profile_config['include_all_tags']))
                     or ('include_any_tags' in profile_config and not any(tag in tags for tag in profile_config['include_any_tags']))
                     or ('exclude_all_tags' in profile_config and all(tag in tags for tag in profile_config['exclude_all_tags']))
@@ -732,7 +732,7 @@ class worker:
         for sltag, hashes in tagdict.items():
             for thash in hashes:
                 torrent = torrents[thash]
-                torrenttags = set(torrent.tags.split(", "))
+                torrenttags = set(torrent.get("tags", "").split(", "))
                 if sltag not in torrenttags:
                     logger.debug(f"{self.name:<10} - adding tag {sltag} to {torrent.get('name')}")
                     addtag[sltag].add(thash)
