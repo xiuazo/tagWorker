@@ -302,7 +302,7 @@ class worker:
         inode_map = build_inode_map(root_path)
         noHLs, addtag, deltag = set(), set(), set()
         for thash, torrent in torrents.items():
-            if torrent.category not in noHL_cats:
+            if torrent.get("category") not in noHL_cats:
                 continue
 
             tagged = noHL_tag in torrent.tags.split(", ")
