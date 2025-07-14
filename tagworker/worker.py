@@ -213,7 +213,7 @@ class worker:
         referenced_files = set()
         torrents = self.client.torrents
         for thash, torrent in torrents.items():
-            translated = translate_path(torrent.content_path, self.translation_table)
+            translated = translate_path(torrent.get("content_path"), self.translation_table)
             if os.path.isfile(translated):
                 files = {translated}
             elif os.path.isdir(translated):
@@ -279,11 +279,16 @@ class worker:
         #
         # en caso de multifile miraremos fichero a fichero sus contenidos hasta encontrar alguno que si tenga HL fuera
         def torrent_has_HL(torrent, inode_map, translation_table):
-            realfile = translate_path(torrent.content_path, translation_table)
+            # TODO en que situacion esta vacio?? soltar excepcion?? continuar??
+            # try:
+            content_path = torrent.get("content_path")
+            # except:
+                # pass
+            realfile = translate_path(content_path, translation_table)
             if is_file(realfile):
                 return file_has_outer_links(realfile, inode_map)
             # FIXME iterar contenidos del content_path. si hay algun HL lo damos por bueno
-            for root, _, files in os.walk(translate_path(torrent.content_path, translation_table)):
+            for root, _, files in os.walk(translate_path(content_path, translation_table)):
                 for file in files:
                     realfile = translate_path(file, translation_table)
                     fullpath = os.path.join(root, realfile)
@@ -305,7 +310,7 @@ class worker:
             if torrent.get("category") not in noHL_cats:
                 continue
 
-            tagged = noHL_tag in torrent.tags.split(", ")
+            tagged = noHL_tag in torrent.get("tags", "").split(", ")
 
             if not torrent_has_HL(torrent, inode_map, translation_table):
                 noHLs.add(thash)
@@ -435,7 +440,8 @@ class worker:
                     if tracker.get('status') not in {0,4}:
                         working = True
                         break
-                    else: errormsg = tracker.get('msg')
+                    elif tracker.get('status') != 0:
+                        errormsg = tracker.get('msg')
             else:
                 errormsg = ''
                 working = torrent.get('tracker')
@@ -492,6 +498,7 @@ class worker:
                         or (getattr(hr, 'percent', None) and (torrent['downloaded'] < (hr.percent/100) * torrent['size']))
                         ):
                         if hr_tag in torrent_tags:
+                            logger.debug(f"{self.name:<10} - {torrent.name} now satisfied.")
                             satisfied.add(thash)
                     # H&R
                     else:
