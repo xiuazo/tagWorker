@@ -2,13 +2,20 @@ import sys
 import platform
 import time
 import argparse
-
+import threading
+import signal
+import schedule
+from pytimeparse2 import parse
 from .logger import logger
 from .config import Config, GlobalConfig
 from .worker import worker
 from .locker import acquire_lock, LockAcquisitionError
 
 CONFIG_FILE = 'config/config.yml'
+
+def signal_handler(sig, frame):
+    stop_event.set()
+stop_event = threading.Event()
 
 def print_banner(version="0.0.1"):
     # ANSI codes
@@ -61,13 +68,6 @@ def startup_msg(config=None):
         logger.info(f"Trackers        : {tracker_details}")
     print('')
 
-def stop_instances(instances):
-    for instance in instances:
-        try:
-            logger.info(f"{instance.name:<10} - Stopping...")
-            instance.stop()
-        except Exception as e:
-            logger.error(f"{instance.name:<10}- Error stopping: {e}")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -93,6 +93,8 @@ def main():
     logger.info(f"{'APP':<10} - Logger init")
     logger.info(f"{'APP':<10} - Reading config file")
 
+    signal.signal(signal.SIGINT, signal_handler)
+
     if not singlerun: # siendo singlerun permitimos que exista otra instancia ejecucion
         try:
             lock_file = acquire_lock(configfile)
@@ -105,26 +107,45 @@ def main():
 
     startup_msg()
     # inits
-    instances = set()
+    workers = set()
+    tag_interval = parse(GlobalConfig.get('app.tagging_schedule_interval'))
+    disk_interval = parse(GlobalConfig.get('app.disktasks_schedule_interval'))
+
     for name, client in GlobalConfig.get("clients").items():
-        if not client.enabled:
-            continue
         try:
-            instance = worker(name, client)
-            instance.run(singlerun)
-            instances.add(instance)
+            if client.enabled:
+                workers.add( worker(name, client, tag_interval=tag_interval, disk_interval=disk_interval) )
         except Exception as e:
             logger.critical(f"{name:<10} - {e} {str(e)}")
             raise
 
-    try:
-        if not singlerun:
-            while True:
-                time.sleep(10)
-    except (KeyboardInterrupt, SystemExit):
-        pass
-    finally:
-        stop_instances(instances)
+    if singlerun:
+        threads = []
+        for w in workers:
+            t = threading.Thread(target=w.run, kwargs={"singlerun": singlerun} )
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join()  # Esperar a que todos terminen
+
+    else:
+        for w in workers:
+            w.run(singlerun=False)
+        try:
+            while not stop_event.is_set():
+                schedule.run_pending()
+                # if singlerun: break
+                time.sleep(1)
+        except KeyboardInterrupt:
+            stop_event.set()
+
+    for w in workers:
+        try:
+            logger.info(f"{w.name:<10} - Stopping...")
+            w.logout()
+        except Exception as e:
+            logger.error(f"{w.name:<10}- Error stopping: {e}")
 
 
 if __name__ == "__main__":

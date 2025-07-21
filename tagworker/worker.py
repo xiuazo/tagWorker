@@ -2,8 +2,8 @@ import os
 import time
 import threading
 import traceback
-
 import tldextract
+import schedule
 
 from collections import defaultdict
 from datetime import timedelta
@@ -19,14 +19,13 @@ METHOD_DICT = 1
 
 DEFAULT_ISSUE_METHOD = METHOD_API
 
-
 class worker:
     instances = set()
     reacted = dict()
 
     new_torrents = False
 
-    def __init__(self, name, config, trackerissue_method = DEFAULT_ISSUE_METHOD):
+    def __init__(self, name, config, trackerissue_method=DEFAULT_ISSUE_METHOD, tag_interval=15, disk_interval=1800):
         self.client = qBit(config.url, config.user, config.password)
         self.config = config
         self.name = name or tldextract.extract(config['url']).domain
@@ -41,19 +40,36 @@ class worker:
         self.changes_dict = {}
         self._full_update_time = 0
 
-        self.stop_event = threading.Event()
-        self.tag_idle = threading.Event()
-        self.tag_trigger = threading.Event()
-        self.disk_idle = threading.Event()
-        # si tags espera por el disco y el disco espera por tags... malo. iniciamos asi para iniciar por los tags (es quien hace sync)
-        self.tag_idle.clear()
-        self.disk_idle.set()
-
-        self.tag_thread = self.disk_thread = None
-
         self.__class__.reacted[self] = False
-        # self.__class__.instances.append(self)
         self.__class__.instances.add(self)
+
+        self.tag_interval = tag_interval
+        self.disk_interval = disk_interval
+
+        self.lock = threading.Lock()
+        self.tag_running = threading.Event()
+        self.disk_running = threading.Event()
+        self.stop_event = threading.Event()
+
+    def run(self, singlerun=False):
+        if not self.verify_credentials(): return False
+
+        if singlerun:
+            self.task_tag()
+            if self.local_client:
+                self.task_disk()
+            return
+
+        schedule.every(self.tag_interval).seconds.do(
+            lambda: threading.Thread(target=self.task_tag).start()
+        )
+        threading.Thread(target=self.task_tag).start()
+
+        if self.local_client:
+            schedule.every(self.disk_interval).seconds.do(
+                lambda: threading.Thread(target=self.task_disk).start()
+            )
+            threading.Thread(target=self.task_disk).start()
 
     @classmethod
     def get_instances(cls):
@@ -68,26 +84,17 @@ class worker:
     def is_running(self):
         return bool(self.tag_thread or self.disk_thread)
 
-    def run(self, singlerun = False):
+    def verify_credentials(self):
         try:
             self.client.login()
             logger.info(f"{self.name:<10} - logged in")
+            return True
         except Exception as e:
             logger.error(f"{self.name:<10} - unable to log in. client disabled. {e}")
-            return
+            return False
 
-        self.tag_thread = threading.Thread(target=self.task_tag, args={singlerun})
-        self.tag_thread.start()
-        self.disk_thread = threading.Thread(target=self.task_disk, args={singlerun})
-        self.disk_thread.start()
-
-    def stop(self):
-        self.stop_event.set()
-        self.tag_trigger.set()
+    def logout(self):
         self.client.logout()
-        if self.tag_thread: self.tag_thread.join()
-        if self.disk_thread: self.disk_thread.join()
-        self.tag_thread = self.disk_thread = None
 
     def torrents_changed(self, prop = None):
         # obtengo la informacion de los cambios de los torrents
@@ -97,84 +104,102 @@ class worker:
         all_torrents = self.client.torrents
         return {th: all_torrents[th] for th, tv in changed_t.items() if not watched_props or (watched_props & tv.keys())}
 
-    def task_tag(self, singlerun):
+    def task_tag(self):
+        if self.lock.locked() or self.disk_running.is_set():
+            logger.warning(f"{self.name:<10} - Busy. Retrying in 5s...")
+            threading.Timer(5, lambda: threading.Thread(target=self.task_tag).start()).start()
+            return
+        if self.tag_running.is_set():
+            logger.warning(f"{self.name:<10} - Already executing. Ignoring.")
+            return
+
+        self.tag_running.set()
+        tags_changed = False
         commands = self.commands
         sl_torrent_queue = set()
 
-        while not self.stop_event.is_set():
-            wait_for_event("disk_done", self.disk_idle, self.name)
-            self.tag_idle.clear()
+        with self.lock:
+            try:
+                while True:
+                    prev_torrents = set(self.client.torrents.keys())
 
-            prev_torrents = set(self.client.torrents.keys())
+                    request_fullsync = time.time() - self._full_update_time > parse(GlobalConfig.get('app.fullsync_interval'))
+                    self.client.sync(request_fullsync)
+                    if request_fullsync:
+                        logger.info("%-10s - SYNCING WITH FULL DATA", self.name)
+                        self._full_update_time = time.time()
 
-            request_fullsync = time.time() - self._full_update_time > parse(GlobalConfig.get('app.fullsync_interval'))
-            self.client.sync(request_fullsync)
-            if request_fullsync:
-                logger.info("%-10s - SYNCING WITH FULL DATA", self.name)
-                self._full_update_time = time.time()
-            #logger.debug(f"{self.name:<10} - --> {len(self.client.sync_data.get('torrents'))} changed")
+                    tag_funcs = {
+                        'tag_trackers': self.tag_trackers,
+                        'tag_HR': self.tag_HR,
+                        'scan_no_tmm': self.tag_TMM,
+                        'tag_issues': self.tag_issues,
+                        'tag_rename': self.tag_rename,
+                        'tag_lowseeds': self.tag_lowseeds,
+                        'tag_HUNO': self.tag_HUNO,
+                    }
 
-            tag_funcs = {
-                'tag_trackers': self.tag_trackers,
-                'tag_HR': self.tag_HR,
-                'scan_no_tmm': self.tag_TMM,
-                'tag_issues': self.tag_issues,
-                'tag_rename': self.tag_rename,
-                'tag_lowseeds': self.tag_lowseeds,
-                'tag_HUNO': self.tag_HUNO,
-            }
+                    tags_changed = False
+                    for key, func in tag_funcs.items():
+                        if commands.get(key, False):
+                            changes = func()
+                            if changes: logger.debug(f"{self.name:<10} - {key} made changes.")
+                            tags_changed |= changes
 
-            tags_changed = False
-            for key, func in tag_funcs.items():
-                if commands.get(key, False):
-                    changes = func()
-                    if changes: logger.debug(f"{self.name:<10} - {key} made changes.")
-                    tags_changed |= changes
+                    curr_torrents = set(self.client.torrents.keys())
+                    if curr_torrents != prev_torrents:
+                        logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need to check dupes")
+                        # podria estar ya a true y con alguna instancia ya reaccionada. estas se lo podrian perder
+                        self.__class__.reacted = {key: False for key in self.__class__.reacted}
 
-            curr_torrents = set(self.client.torrents.keys())
-            if curr_torrents != prev_torrents:
-                logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need to check dupes")
-                # podria estar ya a true y con alguna instancia ya reaccionada. estas se lo podrian perder
-                self.__class__.reacted = {key: False for key in self.__class__.reacted}
+                    # si el usuario quiere, si han habido novedades desde el ultimo scan
+                    # ... y si el resto de instancias estan ya pobladas!
+                    # tag_dupes devuelve None si no encuentra ningun otro cliente poblado
+                    if GlobalConfig.get('app.dupes.enabled', False) and not self.__class__.reacted[self]:
+                        result = self.tag_dupes()
+                        self.__class__.reacted[self] = bool(result is not None)
+                        tags_changed |= bool(result)
 
-            # si el usuario quiere, si han habido novedades desde el ultimo scan
-            # ... y si el resto de instancias estan ya pobladas!
-            # tag_dupes devuelve None si no encuentra ningun otro cliente poblado
-            if GlobalConfig.get('app.dupes.enabled', False) and not self.__class__.reacted[self]:
-                result = self.tag_dupes()
-                self.__class__.reacted[self] = bool(result is not None)
-                tags_changed |= bool(result)
+                    tags_changed |= self.clean_noHL()
 
-            tags_changed |= self.clean_noHL()
+                    sl_torrent_queue |= set(self.torrents_changed({'category', 'max_seeding_time', 'up_limit', 'tags'}).keys())
 
-            sl_torrent_queue |= set(self.torrents_changed({'category', 'max_seeding_time', 'up_limit', 'tags'}).keys())
+                    if tags_changed:
+                        logger.debug(f"{self.name:<10} - changes have been made. looping...")
+                        time.sleep(2)
+                    else:
+                        # cuando los tags están en orden es cuando ajustamos SL
+                        if commands.get('share_limits', False): self.tag_SL(sl_torrent_queue)
+                        sl_torrent_queue.clear()
+                        break
+            finally:
+                self.tag_running.clear()
 
-            if not tags_changed:
-                # cuando los tags están en orden es cuando ajustamos SL
-                if commands.get('share_limits', False): self.tag_SL(sl_torrent_queue)
-                sl_torrent_queue.clear()
-                # logger.debug(f"{self.name:<10} - sleeping {parse(TagWorker.appconfig.tagging_schedule_interval)}s...")
-                self.tag_idle.set()
-                if singlerun: break
-                self.tag_trigger.wait(timeout=parse(GlobalConfig.get('app.tagging_schedule_interval')))
-                self.tag_trigger.clear()
-            else:
-                logger.debug(f"{self.name:<10} - changes have been made. looping...")
-                self.stop_event.wait(2) # delay para que qbit aplique cambios. no uso tag_trigger pq no quiero que disk_task lo arranque. es un delay interrumpible, sin mas
 
-    def task_disk(self, singlerun):
+    def task_disk(self):
         if not self.local_client:
-            self.disk_idle.set()
             return
+
+        if not self.client.synced:
+            logger.warning(f"{self.name:<10} - Client not synced yet. Retrying in 10s...")
+            threading.Timer(10, lambda: threading.Thread(target=self.task_disk).start()).start()
+            return
+        if self.lock.locked() or self.tag_running.is_set():
+            logger.warning(f"{self.name:<10} - Busy. Retrying in 5s...")
+            threading.Timer(5, lambda: threading.Thread(target=self.task_disk).start()).start()
+            return
+        if self.disk_running.is_set():
+            logger.warning(f"{self.name:<10} - Already executing. Ignoring.")
+            return
+
+        self.disk_running.set()
 
         commands = self.commands
         dry_run = self.dryrun
-        while not self.stop_event.is_set():
-            tagged = False
-            try:
-                wait_for_event("tag_done", self.tag_idle, self.name)
-                self.disk_idle.clear()
 
+        with self.lock:
+            try:
+                tagged = False
                 logger.info(f"{self.name:<10} - disk task started")
 
                 if commands.get('tag_noHL'):
@@ -193,14 +218,14 @@ class worker:
 
             except Exception as e:
                 logger.error(f"Error: {e}\n{traceback.format_exc()}")
+            finally:
+                self.disk_running.clear()
 
             logger.info(f"{self.name:<10} - disk task done")
-            self.disk_idle.set()
             if tagged:
                 logger.debug(f"{self.name:<10} - triggering tag task")
-                self.tag_trigger.set()
-            if singlerun: break
-            self.stop_event.wait(timeout=parse(GlobalConfig.get("app.disktasks_schedule_interval")))
+                threading.Thread(target=self.task_tag).start()
+            # if singlerun: break
 
     def disk_orphans(self, dry_run = True):
         root_path = self.folders.get('root_path')

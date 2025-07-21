@@ -5,3 +5,4 @@ tldextract
 bencodepy
 qbittorrent-api
 portalocker
+schedule
