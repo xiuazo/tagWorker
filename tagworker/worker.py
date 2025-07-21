@@ -18,13 +18,16 @@ from .files import move_to_dir, is_file, build_inode_map, file_has_outer_links, 
 METHOD_API = 0
 METHOD_DICT = 1
 
+DEFAULT_ISSUE_METHOD = METHOD_API
+
+
 class worker:
     instances = []
     reacted = {}
 
     new_torrents = False
 
-    def __init__(self, name, config, trackerissue_method = METHOD_API):
+    def __init__(self, name, config, trackerissue_method = DEFAULT_ISSUE_METHOD):
         self.id = uuid.uuid4()
         self.client = qBit(config.url, config.user, config.password)
         self.config = config

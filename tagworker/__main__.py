@@ -3,11 +3,12 @@ import platform
 import time
 import argparse
 
-from tagworker import CONFIG_FILE, TRACKERISSUE_METHOD
 from .logger import logger
 from .config import Config, GlobalConfig
 from .worker import worker
 from .locker import acquire_lock, LockAcquisitionError
+
+CONFIG_FILE = 'config/config.yml'
 
 def print_banner(version="0.0.1"):
     # ANSI codes
@@ -77,8 +78,16 @@ def main():
         action="store_true",
         help="Ejecuta el script una sola vez"
     )
+    parser.add_argument(
+        "-c", "--config",
+        type=str,
+        default=CONFIG_FILE,
+        help=f"Ruta al archivo de configuración (por defecto: {CONFIG_FILE})"
+    )
+
     args = parser.parse_args()
     singlerun = args.singlerun
+    configfile = args.config
 
     print_banner()
     logger.info(f"{'APP':<10} - Logger init")
@@ -86,12 +95,12 @@ def main():
 
     if not singlerun: # siendo singlerun permitimos que exista otra instancia ejecucion
         try:
-            lock_file = acquire_lock(CONFIG_FILE)
+            lock_file = acquire_lock(configfile)
         except LockAcquisitionError as e:
-            logger.critical(f"{'APP':<10} - Ya hay otra instancia usando la misma configuración: {CONFIG_FILE}")
+            logger.critical(f"{'APP':<10} - Ya hay otra instancia usando la misma configuración: {configfile}")
             sys.exit(1)
 
-    app_config = Config(CONFIG_FILE)
+    app_config = Config(configfile)
     GlobalConfig.set(app_config)
 
     startup_msg()
@@ -101,7 +110,7 @@ def main():
         if not client.enabled:
             continue
         try:
-            instance = worker(name, client, TRACKERISSUE_METHOD)
+            instance = worker(name, client)
             instance.run(singlerun)
             instances.add(instance)
         except Exception as e:
