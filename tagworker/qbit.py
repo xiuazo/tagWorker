@@ -1,5 +1,4 @@
 import os
-import uuid
 import qbittorrentapi
 
 from .files import is_file
@@ -18,26 +17,12 @@ def deep_merge(target, source):
     return target
 
 class qBit:
-    instances = set()
-
     def __init__(self, url, user, pwd):
         self.__client = qbittorrentapi.Client(host=url, username=user, password=pwd)
-        self.__uid = uuid.uuid4()
 
         self.__rid = None
         self.__sync_data = None
         self.__state = dict()
-        __class__.instances.add(self)
-
-    @classmethod
-    def all_instances_iterator(self):
-        for instance in self.instances:
-            yield instance
-            # yield instance.id, instance.torrents
-
-    @property
-    def id(self):
-        return self.__uid
 
     @property
     def synced(self):
@@ -63,7 +48,6 @@ class qBit:
         if fullsync: self.client.sync.maindata.reset_rid()
         sync_data = self.client.sync.maindata.delta()
 
-        self.__rid = sync_data.rid
         full_update = sync_data.get("full_update", False)
         # torrents = sync_data.get("torrents", {})
         torrents_removed = sync_data.get("torrents_removed", {})
@@ -91,6 +75,8 @@ class qBit:
             #     self.__acumulado['categories'] = {cname:cval for cname, cval in self.__acumulado['categories'].items() if cname not in sync_data['categories_removed']}
             for thash in torrents_removed:
                 self.__state['torrents'].pop(thash, None)
+
+        self.__rid = sync_data.rid
 
     def login(self):
         try:

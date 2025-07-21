@@ -1,7 +1,6 @@
 import os
 import time
 import threading
-import uuid
 import traceback
 
 import tldextract
@@ -22,13 +21,12 @@ DEFAULT_ISSUE_METHOD = METHOD_API
 
 
 class worker:
-    instances = []
-    reacted = {}
+    instances = set()
+    reacted = dict()
 
     new_torrents = False
 
     def __init__(self, name, config, trackerissue_method = DEFAULT_ISSUE_METHOD):
-        self.id = uuid.uuid4()
         self.client = qBit(config.url, config.user, config.password)
         self.config = config
         self.name = name or tldextract.extract(config['url']).domain
@@ -54,11 +52,17 @@ class worker:
         self.tag_thread = self.disk_thread = None
 
         self.__class__.reacted[self] = False
-        self.__class__.instances.append(self)
+        # self.__class__.instances.append(self)
+        self.__class__.instances.add(self)
 
     @classmethod
-    def get_instances(self):
-        return self.instances
+    def get_instances(cls):
+        return cls.instances
+
+    @classmethod
+    def all_instances_iterator(cls):
+        for instance in cls.instances:
+            yield instance
 
     @property
     def is_running(self):
@@ -131,14 +135,14 @@ class worker:
             if curr_torrents != prev_torrents:
                 logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need to check dupes")
                 # podria estar ya a true y con alguna instancia ya reaccionada. estas se lo podrian perder
-                __class__.reacted = {key: False for key in __class__.reacted}
+                self.__class__.reacted = {key: False for key in self.__class__.reacted}
 
             # si el usuario quiere, si han habido novedades desde el ultimo scan
             # ... y si el resto de instancias estan ya pobladas!
             # tag_dupes devuelve None si no encuentra ningun otro cliente poblado
-            if GlobalConfig.get('app.dupes.enabled', False) and not __class__.reacted[self]:
+            if GlobalConfig.get('app.dupes.enabled', False) and not self.__class__.reacted[self]:
                 result = self.tag_dupes()
-                __class__.reacted[self] = bool(result is not None)
+                self.__class__.reacted[self] = bool(result is not None)
                 tags_changed |= bool(result)
 
             tags_changed |= self.clean_noHL()
@@ -385,24 +389,20 @@ class worker:
         return bool(addtag or deltag)
 
     def tag_dupes(self):
-        dupetag = GlobalConfig.get("app.dupes.tag")
-
-        torrents = set()
-        multiple_instances = False
-        for instance in qBit.all_instances_iterator():
-            if not instance.synced:
-                logger.warning(f"{self.name:<10} - not all clients are synced. skipping dupe tagging")
-                return None
-            elif instance.id == self.client.id: continue # my torrents are not dupes!
-            torrents.update(instance.torrents.keys())
-            multiple_instances = True
-        if not multiple_instances:
+        if not len(self.__class__.instances) > 1: # 1 is me!
             logger.warning(f"{self.name:<10} - no other clients. skipping dupe tagging")
             return False
+        torrents = set()
+        for instance in self.__class__.all_instances_iterator():
+            if instance == self: continue # my torrents are not dupes!
+            if not instance.client.synced:
+                logger.warning(f"{self.name:<10} - not all clients are synced. skipping dupe tagging")
+                return None
+            torrents.update(instance.client.torrents.keys())
 
         my_torrents = self.client.torrents
-        my_hashes = set(my_torrents.keys())
-        dupes = torrents & my_hashes
+        dupes = torrents & set(my_torrents.keys())
+        dupetag = GlobalConfig.get("app.dupes.tag")
 
         addtag = set()
         deltag = set()
@@ -410,7 +410,7 @@ class worker:
             tags = my_torrents[thash]['tags'].split(", ")
             if dupetag in tags:
                 if thash not in dupes:
-                    logger.debug(f"{self.name:<10} - {tval['name']} is a NOT dupe but it's tagged")
+                    logger.debug(f"{self.name:<10} - {tval['name']} should not be marked as dupe")
                     deltag.add(thash)
             elif thash in dupes:
                     logger.debug(f"{self.name:<10} - {tval['name']} is a dupe")
