@@ -61,7 +61,7 @@ class worker:
     def is_running(self):
         return bool(self.tag_thread or self.disk_thread)
 
-    def run(self):
+    def run(self, singlerun = False):
         try:
             self.client.login()
             logger.info(f"{self.name:<10} - logged in")
@@ -69,9 +69,9 @@ class worker:
             logger.error(f"{self.name:<10} - unable to log in. client disabled. {e}")
             return
 
-        self.tag_thread = threading.Thread(target=self.task_tag)
+        self.tag_thread = threading.Thread(target=self.task_tag, args={singlerun})
         self.tag_thread.start()
-        self.disk_thread = threading.Thread(target=self.task_disk)
+        self.disk_thread = threading.Thread(target=self.task_disk, args={singlerun})
         self.disk_thread.start()
 
     def stop(self):
@@ -90,7 +90,7 @@ class worker:
         all_torrents = self.client.torrents
         return {th: all_torrents[th] for th, tv in changed_t.items() if not watched_props or (watched_props & tv.keys())}
 
-    def task_tag(self):
+    def task_tag(self, singlerun):
         commands = self.commands
         sl_torrent_queue = set()
 
@@ -148,13 +148,14 @@ class worker:
                 sl_torrent_queue.clear()
                 # logger.debug(f"{self.name:<10} - sleeping {parse(TagWorker.appconfig.tagging_schedule_interval)}s...")
                 self.tag_idle.set()
+                if singlerun: break
                 self.tag_trigger.wait(timeout=parse(GlobalConfig.get('app.tagging_schedule_interval')))
                 self.tag_trigger.clear()
             else:
                 logger.debug(f"{self.name:<10} - changes have been made. looping...")
                 self.stop_event.wait(2) # delay para que qbit aplique cambios. no uso tag_trigger pq no quiero que disk_task lo arranque. es un delay interrumpible, sin mas
 
-    def task_disk(self):
+    def task_disk(self, singlerun):
         if not self.local_client:
             self.disk_idle.set()
             return
@@ -191,6 +192,7 @@ class worker:
             if tagged:
                 logger.debug(f"{self.name:<10} - triggering tag task")
                 self.tag_trigger.set()
+            if singlerun: break
             self.stop_event.wait(timeout=parse(GlobalConfig.get("app.disktasks_schedule_interval")))
 
     def disk_orphans(self, dry_run = True):

@@ -1,6 +1,7 @@
 import sys
 import platform
 import time
+import argparse
 
 from tagworker import CONFIG_FILE, TRACKERISSUE_METHOD
 from .logger import logger
@@ -59,42 +60,63 @@ def startup_msg(config=None):
         logger.info(f"Trackers        : {tracker_details}")
     print('')
 
+def stop_instances(instances):
+    for instance in instances:
+        try:
+            logger.info(f"{instance.name:<10} - Stopping...")
+            instance.stop()
+        except Exception as e:
+            logger.error(f"{instance.name:<10}- Error stopping: {e}")
+
 def main():
+    parser = argparse.ArgumentParser(
+        description="Mantiene tu qBittorrent en orden"
+    )
+    parser.add_argument(
+        "-s", "--singlerun",
+        action="store_true",
+        help="Ejecuta el script una sola vez"
+    )
+    args = parser.parse_args()
+    singlerun = args.singlerun
+
     print_banner()
     logger.info(f"{'APP':<10} - Logger init")
     logger.info(f"{'APP':<10} - Reading config file")
 
-    try:
-        lock_file = acquire_lock(CONFIG_FILE)
-    except LockAcquisitionError as e:
-        logger.critical(f"{'APP':<10} - Ya hay otra instancia usando configuración equivalente: {CONFIG_FILE}")
-        sys.exit(1)
+    if not singlerun: # siendo singlerun permitimos que exista otra instancia ejecucion
+        try:
+            lock_file = acquire_lock(CONFIG_FILE)
+        except LockAcquisitionError as e:
+            logger.critical(f"{'APP':<10} - Ya hay otra instancia usando la misma configuración: {CONFIG_FILE}")
+            sys.exit(1)
 
     app_config = Config(CONFIG_FILE)
     GlobalConfig.set(app_config)
 
     startup_msg()
     # inits
+    instances = set()
     for name, client in GlobalConfig.get("clients").items():
         if not client.enabled:
             continue
         try:
             instance = worker(name, client, TRACKERISSUE_METHOD)
-            instance.run()
+            instance.run(singlerun)
+            instances.add(instance)
         except Exception as e:
             logger.critical(f"{name:<10} - {e} {str(e)}")
             raise
 
     try:
-        while True:
-            time.sleep(1000)
+        if not singlerun:
+            while True:
+                time.sleep(10)
     except (KeyboardInterrupt, SystemExit):
-        for instance in worker.get_instances():
-            try:
-                logger.info(f"{instance.name:<10} - Stopping...")
-                instance.stop()
-            except Exception as e:
-                logger.error(f"{instance.name:<10}- Error stopping: {e}")
+        pass
+    finally:
+        stop_instances(instances)
+
 
 if __name__ == "__main__":
     main()
