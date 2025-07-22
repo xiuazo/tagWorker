@@ -95,15 +95,15 @@ class qBit:
 
     # @property
     def torrent_files(self, thash):
-        files = self.client.torrents.files(thash)
-
         # Si es un archivo único, devuelve su ruta
-        torrent = self.__state.get('torrents', {})[thash]
-        content_path = torrent.content_path
+        torrent = self.torrents[thash]
+        content_path = torrent.get('content_path', '')
+        # FIXME: no aplica translation path, por lo que nunca existe si vamos a buscarlo al disco.
         if is_file(content_path):
             return {content_path}
 
         filelist = set()
+        files = self.client.torrents.files(thash)
         for file in files:
             # WARNING windows necesita normalizacion o uniria el path con el filename mediante /
             filelist.add(os.path.join(torrent.save_path, file.name))

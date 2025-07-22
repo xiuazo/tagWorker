@@ -49,7 +49,6 @@ class worker:
         self.lock = threading.Lock()
         self.tag_running = threading.Event()
         self.disk_running = threading.Event()
-        self.stop_event = threading.Event()
 
     def run(self, singlerun=False):
         if not self.verify_credentials(): return False
@@ -251,7 +250,7 @@ class worker:
             if os.path.isfile(translated):
                 files = {translated}
             elif os.path.isdir(translated):
-                files = self.client.torrent_files(thash)
+                files = self.client.torrent_files(thash) # triggers API call
                 files = {translate_path(file, self.translation_table) for file in files}
             else: # no existe el translated en el disco => errored/missing files torrent o descarga incompleta
                 # TODO: torrent.state checks, error torrent tagging... ?

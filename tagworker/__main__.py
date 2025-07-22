@@ -70,6 +70,7 @@ def startup_msg(config=None):
 
 
 def main():
+    signal.signal(signal.SIGINT, signal_handler)
     parser = argparse.ArgumentParser(
         description="Mantiene tu qBittorrent en orden"
     )
@@ -91,33 +92,26 @@ def main():
 
     print_banner()
     logger.info(f"{'APP':<10} - Logger init")
+
+    try:
+        lock_file = acquire_lock(configfile)
+    except LockAcquisitionError as e:
+        logger.critical(f"{'APP':<10} - Ya hay otra instancia usando la misma configuración: {configfile}")
+        sys.exit(1)
+
     logger.info(f"{'APP':<10} - Reading config file")
-
-    signal.signal(signal.SIGINT, signal_handler)
-
-    if not singlerun: # siendo singlerun permitimos que exista otra instancia ejecucion
-        try:
-            lock_file = acquire_lock(configfile)
-        except LockAcquisitionError as e:
-            logger.critical(f"{'APP':<10} - Ya hay otra instancia usando la misma configuración: {configfile}")
-            sys.exit(1)
-
     app_config = Config(configfile)
     GlobalConfig.set(app_config)
 
     startup_msg()
     # inits
     workers = set()
-    tag_interval = parse(GlobalConfig.get('app.tagging_schedule_interval'))
-    disk_interval = parse(GlobalConfig.get('app.disktasks_schedule_interval'))
+    tag_interval = parse(GlobalConfig.get('app.tagging_schedule_interval', '15'))
+    disk_interval = parse(GlobalConfig.get('app.disktasks_schedule_interval', '60m'))
 
     for name, client in GlobalConfig.get("clients").items():
-        try:
-            if client.enabled:
-                workers.add( worker(name, client, tag_interval=tag_interval, disk_interval=disk_interval) )
-        except Exception as e:
-            logger.critical(f"{name:<10} - {e} {str(e)}")
-            raise
+        if client.enabled:
+            workers.add( worker(name, client, tag_interval=tag_interval, disk_interval=disk_interval) )
 
     if singlerun:
         threads = []
@@ -128,14 +122,12 @@ def main():
 
         for t in threads:
             t.join()  # Esperar a que todos terminen
-
     else:
         for w in workers:
             w.run(singlerun=False)
         try:
             while not stop_event.is_set():
                 schedule.run_pending()
-                # if singlerun: break
                 time.sleep(1)
         except KeyboardInterrupt:
             stop_event.set()
