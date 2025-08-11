@@ -351,7 +351,7 @@ class worker:
                     logger.info(f"{self.name:<10} - new noHL: {torrent.name}")
                     addtag.add(thash)
             elif tagged:
-                logger.info(f"{self.name:<10} - {torrent.name} has links now.")
+                logger.info(f"{self.name:<10} - new noHL: {torrent.get('name', 'Unknown')}")
                 deltag.add(thash)
 
         if addtag: self.client.add_tags(addtag, noHL_tag)
