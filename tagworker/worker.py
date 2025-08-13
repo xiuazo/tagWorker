@@ -40,15 +40,15 @@ class worker:
         self.changes_dict = {}
         self._full_update_time = 0
 
-        self.__class__.reacted[self] = False
-        self.__class__.instances.add(self)
-
         self.tag_interval = tag_interval
         self.disk_interval = disk_interval
 
         self.lock = threading.Lock()
         self.tag_running = threading.Event()
         self.disk_running = threading.Event()
+
+        self.__class__.reacted[self] = False
+        self.__class__.instances.add(self)
 
     def run(self, singlerun=False):
         if not self.verify_credentials(): return False
@@ -161,7 +161,7 @@ class worker:
 
                     tags_changed |= self.clean_noHL()
 
-                    sl_torrent_queue |= set(self.torrents_changed({'category', 'max_seeding_time', 'up_limit', 'tags'}).keys())
+                    sl_torrent_queue |= set(self.torrents_changed({'state', 'category', 'max_seeding_time', 'up_limit', 'tags'}).keys())
 
                     if tags_changed:
                         logger.debug(f"{self.name:<10} - changes have been made. looping...")
@@ -724,9 +724,9 @@ class worker:
 
     def tag_SL(self, torrentset):
         if not torrentset: return
-        client = self.client
+        torrents = {thash : self.client.torrents.get(thash) for thash in torrentset}
 
-        logger.info(f"{self.name:<10} - setting {len(torrentset)} sharelimits")
+        # logger.debug(f"{self.name:<10} - checking {len(torrents)} torrents sharelimits")
 
         profiles = self.share_limits
         tagprefix = GlobalConfig.get("app.share_limits_tag_prefix")
@@ -738,8 +738,6 @@ class worker:
             tagname = profile_config.get('custom_tag', tagprefix + profile_name)
             profiles_dict[profile_name] = set()
             tagdict[tagname] = set()
-
-        torrents = {thash : self.client.torrents.get(thash) for thash in torrentset}
 
         for thash, torrent in torrents.items():
             if not torrent:
@@ -765,6 +763,8 @@ class worker:
 
         addtag = defaultdict(set)
         deltag = defaultdict(set)
+        resume = set()
+
         for sltag, hashes in tagdict.items():
             for thash in hashes:
                 torrent = torrents[thash]
@@ -779,13 +779,16 @@ class worker:
                     logger.debug(f"{self.name:<10} - removing tag {sltag} from {torrent.get('name')}")
                     deltag[sltag].add(thash)
 
+        sharelimits_changed = 0
         for group_name, hashes in profiles_dict.items():
             tagname = profiles[group_name].get('custom_tag', tagprefix + group_name)
+            # logger.debug(f"{self.name:<10} - {len(hashes)} torrents {tagname}")
 
             # ratio and limit
             p_maxratio = profiles[group_name].get('max_ratio', -2)
             p_maxtime = profiles[group_name].get('max_seeding_time', -2)
             p_uplimit = profiles[group_name].get('upload_limit', -2)
+            p_autoresume = profiles[group_name].get('auto_resume', True)
 
             if parse(p_maxtime) > 0:
                 p_maxtime = int((parse(p_maxtime) / 60))
@@ -794,21 +797,48 @@ class worker:
                     'ratio': p_maxratio,
                     'time':p_maxtime
                 }
-            if len(hashes): logger.debug(f"{self.name:<10} - {len(hashes)} torrents {tagname}")
-            client.sharelimit(hashes, limits)
-            client.uploadlimit(hashes, p_uplimit)
 
-        changes = 0
+            fix_hashes = set()
+            for h in hashes:
+                torrent = torrents[h]
+                if (
+                    (torrent['ratio_limit'] != p_maxratio)
+                    or (torrent['seeding_time_limit'] != p_maxtime)
+                    or (torrent['up_limit'] > 0 and torrent['up_limit'] != p_uplimit * 1024)
+                ):
+                    logger.debug(f"{self.name:<10} - Changing {torrent.get('name')} sharelimit to {group_name} profile.")
+                    fix_hashes.add(h)
+
+                if p_autoresume:
+                    maxtime = torrent['max_seeding_time'] * 60
+                    completed = maxtime >= 0 and maxtime < torrent['seeding_time']
+                    if torrent.get('state') == 'pausedUP' and not completed:
+                        logger.debug(f"{self.name:<10} - Resuming {torrent.get('name')}.")
+                        resume.add(h)
+
+            if len(fix_hashes):
+                sharelimits_changed += len(fix_hashes)
+                self.client.sharelimit(fix_hashes, limits)
+                self.client.uploadlimit(fix_hashes, p_uplimit)
+
+        tags_changed = 0
         for sltag, hashes in addtag.items():
-            client.add_tags(hashes, sltag)
-            changes += len(hashes)
+            self.client.add_tags(hashes, sltag)
+            tags_changed += len(hashes)
         for sltag, hashes in deltag.items():
-            client.remove_tags(hashes, sltag)
-            changes += len(hashes)
+            self.client.remove_tags(hashes, sltag)
+            tags_changed += len(hashes)
+        if resume:
+            self.client.start(resume)
 
-        logger.info(f"{self.name:<10} - {changes} new sharelimits set")
+        if tags_changed:
+            logger.info(f"{self.name:<10} - {tags_changed} tags changed")
+        if sharelimits_changed:
+            logger.info(f"{self.name:<10} - {sharelimits_changed} sharelimits set")
+        if resume:
+            logger.info(f"{self.name:<10} - {len(resume)} torrents resumed")
 
-        return changes
+        return bool(tags_changed or sharelimits_changed or resume)
 
 # ============================================
 # AUX

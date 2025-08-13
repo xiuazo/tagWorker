@@ -140,3 +140,7 @@ class qBit:
 
     def get_trackers(self, thash):
         return self.client.torrents.trackers(thash)
+
+    def start(self, thashes):
+        return self.client.torrents_start(thashes)
+        pass
