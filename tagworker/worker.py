@@ -168,7 +168,7 @@ class worker:
                         time.sleep(2)
                     else:
                         # cuando los tags están en orden es cuando ajustamos SL
-                        if commands.get('share_limits', False): self.tag_SL(sl_torrent_queue)
+                        if commands.get('share_limits', False): self.set_sharelimits(sl_torrent_queue)
                         sl_torrent_queue.clear()
                         break
             finally:
@@ -348,7 +348,7 @@ class worker:
             if not torrent_has_HL(torrent, inode_map, translation_table):
                 noHLs.add(thash)
                 if not tagged:
-                    logger.info(f"{self.name:<10} - new noHL: {torrent.name}")
+                    logger.info(f"{self.name:<10} - new noHL: {torrent.get('name')}")
                     addtag.add(thash)
             elif tagged:
                 logger.info(f"{self.name:<10} - new noHL: {torrent.get('name', 'Unknown')}")
@@ -476,8 +476,8 @@ class worker:
                 working = torrent.get('tracker')
             if not working:
                 if errortag not in ttags:
+                    logger.debug(f"{self.name:<10} - errored {tldextract.extract(torrent['tracker']).domain}: {torrent['name']} {'(' + errormsg + ')' if errormsg else ''}")
                     errored.add(thash)
-                logger.debug(f"{self.name:<10} - errored {tldextract.extract(torrent['tracker']).domain}: {torrent['name']} {'(' + errormsg + ')' if errormsg else ''}")
             elif errortag in ttags:
                 logger.debug(f"{self.name:<10} - fixed {tldextract.extract(torrent['tracker']).domain}: {torrent['name']} ")
                 unerrored.add(thash)
@@ -722,7 +722,7 @@ class worker:
 
         return bool(addtag or deltag)
 
-    def tag_SL(self, torrentset):
+    def set_sharelimits(self, torrentset):
         if not torrentset: return
         torrents = {thash : self.client.torrents.get(thash) for thash in torrentset}
 

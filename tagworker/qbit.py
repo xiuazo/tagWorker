@@ -106,7 +106,7 @@ class qBit:
         files = self.client.torrents.files(thash)
         for file in files:
             # WARNING windows necesita normalizacion o uniria el path con el filename mediante /
-            filelist.add(os.path.join(torrent.save_path, file.name))
+            filelist.add(os.path.join(torrent.get('save_path'), file.name))
         return filelist
 
     def delete_tags(self, tags):
