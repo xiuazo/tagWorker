@@ -51,7 +51,7 @@ def get_top_level_folder(relative_path):
 
 def process_torrents(torrents, inode_dict):
     tag_queue = defaultdict(set)
-
+    xseed_only = set()
     for torrent in torrents:
         try:
             hardlink_folders = set()
@@ -72,17 +72,23 @@ def process_torrents(torrents, inode_dict):
 
             hardlink_folders.discard(XSEEDFOLDER)
             hardlink_folders.discard(ORPHANFOLDER)
-            if hardlink_folders:
-                for folder in hardlink_folders:
-                    if tag_name(folder) not in torrent.tags or CROSS_SEED_TAG not in torrent.tags:
-                        tag_queue[folder].add(torrent.hash)
-                if len(hardlink_folders) > 1:
-                    print(f"WARNING: Torrent {torrent.name} links to {len(hardlink_folders)} folders: {', '.join(hardlink_folders)}")
-            else:
-                print(f"Torrent: {torrent.name} only in {XSEEDFOLDER} folder")
+
+            if not hardlink_folders:
+                xseed_only.add(torrent.name)
+                continue
+
+            for folder in hardlink_folders:
+                if tag_name(folder) not in torrent.tags or CROSS_SEED_TAG not in torrent.tags:
+                    tag_queue[folder].add(torrent.hash)
+            if len(hardlink_folders) > 1:
+                print(f"WARNING: Torrent {torrent.name} links to {len(hardlink_folders)} folders: {', '.join(hardlink_folders)}")
 
         except ConnectionError as e:
             print(f"Error processing torrent '{torrent.name}': {e}")
+
+    if xseed_only:
+        for n in sorted(xseed_only):
+            print(f"Torrent: {n} only in {XSEEDFOLDER} folder")
 
     return tag_queue
 
