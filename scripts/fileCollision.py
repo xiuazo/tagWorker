@@ -1,53 +1,78 @@
 import os
 import requests
+import qbittorrentapi
+import logging
+import json
+from logging.handlers import TimedRotatingFileHandler
 from urllib.parse import urljoin
 from dotenv import load_dotenv
+
+# Configuración
+TAG_NAME = "@COLLISION"  # Nombre de la etiqueta para torrents con conflictos
+
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 dotenv_path = os.path.join(script_dir, '.env')
 load_dotenv(dotenv_path, override=True)
 
-# Configuración
-QB_URL = os.getenv('QBITTORRENT_URL')
-USERNAME = os.getenv('QBITTORRENT_USERNAME')
-PASSWORD = os.getenv('QBITTORRENT_PASSWORD')
 
-TAG_NAME = "@COLLISION"  # Nombre de la etiqueta para torrents con conflictos
+# ---------------- LOGGER ----------------
+def setup_logger():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    log_dir = os.path.join(base_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
 
-def login_to_qbittorrent():
-    """Inicia sesión en la API de qBittorrent y devuelve la cookie de sesión."""
-    login_url = urljoin(QB_URL, "api/v2/auth/login")
-    data = {
-        "username": USERNAME,
-        "password": PASSWORD
-    }
-    response = requests.post(login_url, data=data)
-    if response.status_code == 200 and response.text == "Ok.":
-        return response.cookies
-    else:
-        raise Exception("No se pudo iniciar sesión en qBittorrent. Verifica las credenciales y la URL.")
+    script_name = os.path.splitext(os.path.basename(__file__))[0]  # → "blah"
+    log_file = os.path.join(log_dir, f"{script_name}.log")
 
-def get_torrents(cookies):
-    """Obtiene la lista de torrents desde qBittorrent."""
-    torrents_url = urljoin(QB_URL, "api/v2/torrents/info")
-    response = requests.get(torrents_url, cookies=cookies)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        raise Exception("No se pudo obtener la lista de torrents.")
+    formatter = logging.Formatter(
+        fmt="[%(asctime)s UTC] [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
 
-def tag_torrents(cookies, hashes):
-    """Asigna una etiqueta a múltiples torrents por sus hashes."""
-    tag_url = urljoin(QB_URL, "api/v2/torrents/removeTags")
-    requests.post(tag_url, data={'hashes':'all', 'tags': TAG_NAME}, cookies=cookies)
-    tag_url = urljoin(QB_URL, "api/v2/torrents/addTags")
-    data = {
-        "hashes": '|'.join(hashes),
-        "tags": TAG_NAME
-    }
-    response = requests.post(tag_url, data=data, cookies=cookies)
-    if response.status_code != 200:
-        raise Exception(f"No se pudo asignar la etiqueta a los torrents con hashes: {', '.join(hashes)}.")
+    # Rotación diaria, conserva 7 días
+    file_handler = TimedRotatingFileHandler(
+        log_file, when="midnight", interval=1, backupCount=7, encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    logger = logging.getLogger("huno")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    # Evitar duplicados
+    logger.propagate = False
+
+    return logger
+
+
+logger = setup_logger()
+
+def get_clients():
+    clients = {}
+
+    # Obtiene y parsea el JSON
+    defined_clients = json.loads(os.getenv("QBIT_CLIENTS", "[]"))
+
+    for c in defined_clients:
+        name = c.get('name')
+        client = qbittorrentapi.Client(host=c['url'], username=c['user'], password=c['pass'])
+        try:
+            client.auth_log_in()
+            clients[name] = client
+            logger.info(f"✅ Conectado a instancia {name} ({c['url']})")
+        except qbittorrentapi.LoginFailed as e:
+                logger.warning(f"⚠️ Falló el login de {name}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Error al conectar con {name} ({c['url']}): {e}")
+        finally:
+            return client
+    return clients
+
 
 def find_duplicate_files(torrents):
     """Encuentra torrents que apuntan al mismo archivo en el disco duro."""
@@ -75,37 +100,25 @@ def find_duplicate_files(torrents):
     return {k: duplicates[k] for k in sorted(duplicates)}
 
 def main():
-    try:
-        # Borrar la terminal
-        # os.system("cls" if os.name == "nt" else "clear")
+    qbt_client = get_clients()
 
-        # Iniciar sesión
-        cookies = login_to_qbittorrent()
+    torrents = qbt_client.torrents_info()
+    duplicates = find_duplicate_files(torrents)
 
-        # Obtener torrents
-        torrents = get_torrents(cookies)
+    if duplicates:
+        print("Se encontraron torrents duplicados que apuntan al mismo archivo:")
+        hashes_to_tag = []
+        for full_path, torrent_list in duplicates.items():
+            print(f"- Archivo: {full_path}")
+            for torrent in torrent_list:
+                print(f"  - {torrent.name}")
+                hashes_to_tag.append(torrent["hash"])
 
-        # Buscar duplicados
-        duplicates = find_duplicate_files(torrents)
-
-        # Imprimir resultados y etiquetar torrents
-        if duplicates:
-            print("Se encontraron torrents duplicados que apuntan al mismo archivo:")
-            hashes_to_tag = []
-            for full_path, torrent_list in duplicates.items():
-                print(f"- Archivo: {full_path}")
-                for torrent in torrent_list:
-                    print(f"  - {torrent['name']}")
-                    hashes_to_tag.append(torrent["hash"])
-
-            # Etiquetar todos los torrents duplicados en una única llamada
-            if hashes_to_tag:
-                tag_torrents(cookies, hashes_to_tag)
-        else:
-            print("No se encontraron torrents duplicados.")
-
-    except Exception as e:
-        print(f"Error: {e}")
+        if hashes_to_tag:
+            qbt_client.torrents_add_tags(TAG_NAME, hashes_to_tag)
+            # tag_torrents(cookies, hashes_to_tag)
+    else:
+        print("No se encontraron torrents duplicados.")
 
 if __name__ == "__main__":
     main()

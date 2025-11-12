@@ -1,16 +1,15 @@
 import os
+import json
 import sys
+import logging
+from logging.handlers import TimedRotatingFileHandler
+
 import qbittorrentapi
 from collections import defaultdict
 from dotenv import load_dotenv
-
 script_dir = os.path.dirname(os.path.abspath(__file__))
 dotenv_path = os.path.join(script_dir, '.env')
 load_dotenv(dotenv_path, override=True)
-
-QBIT_URL = os.getenv('QBITTORRENT_URL')
-QBIT_USER = os.getenv('QBITTORRENT_USERNAME')
-QBIT_PASS = os.getenv('QBITTORRENT_PASSWORD')
 
 # Configuration variables
 ROOTDIR = os.getenv('TORRENTS_PATH') # ruta al torrentdir real en el disco, completa
@@ -22,6 +21,64 @@ ORPHANFOLDER = '.orphaned_data'
 CROSS_SEED_TAG = "xs"
 PREFIX_TAG = "xs."
 POSTFIX_TAG = ""
+
+# ---------------- LOGGER ----------------
+def setup_logger():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    log_dir = os.path.join(base_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    script_name = os.path.splitext(os.path.basename(__file__))[0]  # → "blah"
+    log_file = os.path.join(log_dir, f"{script_name}.log")
+
+    formatter = logging.Formatter(
+        fmt="[%(asctime)s UTC] [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    # Rotación diaria, conserva 7 días
+    file_handler = TimedRotatingFileHandler(
+        log_file, when="midnight", interval=1, backupCount=7, encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    logger = logging.getLogger("huno")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    # Evitar duplicados
+    logger.propagate = False
+
+    return logger
+
+
+logger = setup_logger()
+
+def get_clients():
+    clients = {}
+
+    # Obtiene y parsea el JSON
+    defined_clients = json.loads(os.getenv("QBIT_CLIENTS", "[]"))
+
+    for c in defined_clients:
+        name = c.get('name')
+        client = qbittorrentapi.Client(host=c['url'], username=c['user'], password=c['pass'])
+        try:
+            client.auth_log_in()
+            clients[name] = client
+            logger.info(f"✅ Conectado a instancia {name} ({c['url']})")
+        except qbittorrentapi.LoginFailed as e:
+                logger.warning(f"⚠️ Falló el login de {name}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Error al conectar con {name} ({c['url']}): {e}")
+        finally:
+            return client
+    return clients
+
 
 def build_inode_dict(rootdir):
     inode_dict = {}
@@ -53,6 +110,7 @@ def process_torrents(torrents, inode_dict):
     tag_queue = defaultdict(set)
     xseed_only = set()
     for torrent in torrents:
+        if torrent.progress != 1: continue
         try:
             hardlink_folders = set()
             for file in torrent.files:
@@ -105,29 +163,15 @@ def apply_tags(session, tag_queue):
     print(f'Tagged {total} torrents')
 
 def main():
-    required_names = ["QBIT_URL", "QBIT_USER", "QBIT_PASS", "QBIT_ROOTFOLDER"]
-    try:
-        if not all(globals().get(name) for name in required_names):
-            raise ValueError
-    except ValueError:
-        print("Please ensure all required environment variables are set in the .env file.")
-        sys.exit(1)
+    qbt_client = get_clients()
+    torrents = qbt_client.torrents_info(category=TORRENT_CATEGORY)
 
-    conn_info = dict({
-        'host': QBIT_URL,
-        'username': QBIT_USER,
-        'password': QBIT_PASS
-    })
-
-    with qbittorrentapi.Client(**conn_info) as qbt_client:
-        torrents = qbt_client.torrents_info(category=TORRENT_CATEGORY)
-
-        if not torrents:
-            print(f"No torrents found in category '{TORRENT_CATEGORY}'.")
-        else:
-            inode_dict = build_inode_dict(ROOTDIR)
-            tag_queue = process_torrents(torrents, inode_dict)
-            apply_tags(qbt_client, tag_queue)
+    if not torrents:
+        print(f"No torrents found in category '{TORRENT_CATEGORY}'.")
+    else:
+        inode_dict = build_inode_dict(ROOTDIR)
+        tag_queue = process_torrents(torrents, inode_dict)
+        apply_tags(qbt_client, tag_queue)
 
 
 if __name__ == "__main__":

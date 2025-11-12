@@ -1,4 +1,7 @@
 import os
+import json
+import logging
+from logging.handlers import TimedRotatingFileHandler
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 import qbittorrentapi
@@ -8,11 +11,59 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 dotenv_path = os.path.join(script_dir, '.env')
 load_dotenv(dotenv_path, override=True)
 
-clients = [
-  {"host": os.getenv("QBITTORRENT_URL"), "username": os.getenv("QBITTORRENT_USERNAME"), "password": os.getenv("QBITTORRENT_PASSWORD")},
-  {"host": os.getenv("QBITTORRENT_HBD_URL"), "username": os.getenv("QBITTORRENT_HBD_USERNAME"), "password": os.getenv("QBITTORRENT_HBD_PASSWORD")},
-  {"host": os.getenv("QBITTORRENT_DOCK_URL"), "username": os.getenv("QBITTORRENT_DOCK_USERNAME"), "password": os.getenv("QBITTORRENT_DOCK_PASSWORD")}
-]
+# ---------------- LOGGER ----------------
+def setup_logger():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    log_dir = os.path.join(base_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    script_name = os.path.splitext(os.path.basename(__file__))[0]  # → "blah"
+    log_file = os.path.join(log_dir, f"{script_name}.log")
+
+    formatter = logging.Formatter(
+        fmt="[%(asctime)s UTC] [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    # Rotación diaria, conserva 7 días
+    file_handler = TimedRotatingFileHandler(
+        log_file, when="midnight", interval=1, backupCount=7, encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    logger = logging.getLogger("huno")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    # Evitar duplicados
+    logger.propagate = False
+
+    return logger
+
+logger = setup_logger()
+
+def get_clients():
+    clients = {}
+
+    # Obtiene y parsea el JSON
+    defined_clients = json.loads(os.getenv("QBIT_CLIENTS", "[]"))
+
+    for c in defined_clients:
+        name = c.get('name')
+        client = qbittorrentapi.Client(host=c['url'], username=c['user'], password=c['pass'])
+        try:
+            client.auth_log_in()
+            clients[name] = client
+            logger.info(f"✅ Conectado a instancia {name} ({c['url']})")
+        except qbittorrentapi.LoginFailed as e:
+                logger.warning(f"⚠️ Falló el login de {name}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Error al conectar con {name} ({c['url']}): {e}")
+    return clients
 
 def human_readable_size(size_in_bytes):
     """Convierte un tamaño en bytes a una cadena en formato humano (KiB, MiB, GiB, etc.)."""
@@ -35,7 +86,7 @@ def sum_seedsizes(torrent_list):
     trackers = defaultdict(lambda: TrackerStats(0,0))
 
     for torrent in torrent_list:
-        if not torrent.tracker or torrent.hash in uniquehashes:
+        if not torrent.tracker or torrent.hash in uniquehashes or torrent.progress != 1:
             continue
         uniquehashes.add(torrent.hash)
         tracker_name = urlparse(torrent.tracker).hostname
@@ -54,12 +105,10 @@ def print_tracker_sizes(stats):
 
 def main():
     allt = []
+    clients = get_clients()
     try:
-        for client_config in clients:
-            if not all(client_config.values()):
-                continue
-            with qbittorrentapi.Client(**client_config) as qbit_client:
-                allt += qbit_client.torrents_info()
+        for client in clients.values():
+            allt += client.torrents_info()
         stats = sum_seedsizes(allt)
         print_tracker_sizes(stats)
     except Exception as e:
