@@ -253,6 +253,8 @@ class worker:
                 files = self.client.torrent_files(thash) # triggers API call
                 files = {translate_path(file, self.translation_table) for file in files}
             else: # no existe el translated en el disco => errored/missing files torrent o descarga incompleta
+                if torrent.get('state') in ['error', 'missingFiles'] or torrent.get('progress', '100') != 100:
+                    continue
                 # TODO: torrent.state checks, error torrent tagging... ?
                 logger.warning(f"Missing file: {torrent.name} - {translated}")
             if referenced_files & files:
@@ -533,7 +535,7 @@ class worker:
                     else:
                         if hr_tag not in torrent_tags:
                             unsatisfied.add(thash)
-                        if torrent['state'] in {'pausedUP', 'error'}:
+                        if torrent['state'] in {'pausedUP'}:  # y queuedUP ??
                             autostart.add(thash)
                     break
 
