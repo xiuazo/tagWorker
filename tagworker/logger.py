@@ -21,7 +21,7 @@ file_handler = TimedRotatingFileHandler(
     filename='logs/tagWorker.log',
     when='midnight',
     interval=1,
-    backupCount=15,
+    backupCount=5,
     encoding='utf-8',
     utc=False
 )
