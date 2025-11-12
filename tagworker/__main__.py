@@ -13,9 +13,14 @@ from .locker import acquire_lock, LockAcquisitionError
 
 CONFIG_FILE = 'config/config.yml'
 
+stop_event = threading.Event()
+
 def signal_handler(sig, frame):
     stop_event.set()
-stop_event = threading.Event()
+
+# Captura SIGTERM (systemd stop/restart) y SIGINT (Ctrl+C)
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
 
 def print_banner(version="0.0.1"):
     # ANSI codes
@@ -129,8 +134,12 @@ def main():
             while not stop_event.is_set():
                 schedule.run_pending()
                 time.sleep(1)
-        except KeyboardInterrupt:
-            stop_event.set()
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+        finally:
+            logger.info(f"Shutdown requested...")
+        # except KeyboardInterrupt:
+        #     stop_event.set()
 
     for w in workers:
         try:
