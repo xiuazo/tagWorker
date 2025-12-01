@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
         pause, resume = list(), list()
         for t in torrents:
-            if t.progress != 100: continue # ignore incomplete torrents
+            if t.progress != 1: continue # ignore incomplete torrents
             paused = t.state == 'pausedUP'
             if completed(t):
                 if not paused and t.state not in ['forcedUP']:
