@@ -105,7 +105,7 @@ class worker:
 
     def task_tag(self):
         if self.lock.locked() or self.disk_running.is_set():
-            logger.warning(f"{self.name:<10} - Busy. Retrying in 5s...")
+            logger.warning(f"{self.name:<10} - Busy. Retrying in 5s... (selflock: {self.lock.locked()}/diskrun: {self.disk_running.is_set()}) ")
             threading.Timer(5, lambda: threading.Thread(target=self.task_tag).start()).start()
             return
         if self.tag_running.is_set():
@@ -184,7 +184,7 @@ class worker:
             threading.Timer(10, lambda: threading.Thread(target=self.task_disk).start()).start()
             return
         if self.lock.locked() or self.tag_running.is_set():
-            logger.warning(f"{self.name:<10} - Busy. Retrying in 5s...")
+            logger.warning(f"{self.name:<10} - Busy. Retrying in 5s... (selflock: {self.lock.locked()}/tagrun: {self.tag_running.is_set()}) ")
             threading.Timer(5, lambda: threading.Thread(target=self.task_disk).start()).start()
             return
         if self.disk_running.is_set():
@@ -230,17 +230,29 @@ class worker:
         root_path = self.folders.get('root_path')
         orphan_path = self.folders.get('orphaned_path')
 
+        ignored = {
+            os.path.abspath(os.path.join(root_path, ig)) for ig in self.folders.get('orphaned_ignored', [])
+        }
+
         # Recorre el directorio de descargas, excluyendo el de huerfanos
         hd_files = set()
         for root, dirs, files in os.walk(root_path):
+            # saltamos huerfanos
             if root_path.startswith(orphan_path):
                 dirs[:] = []
-            else:
-                dirs[:] = [d for d in dirs if not os.path.join(root, d).startswith(orphan_path)]
+                continue
+            # filtrar directorios
+            dirs[:] = [
+                d for d in dirs
+                if not os.path.abspath(os.path.join(root, d)).startswith(orphan_path)
+                and not any(
+                    os.path.abspath(os.path.join(root, d)).startswith(ig)
+                    for ig in ignored
+                )
+            ]
 
             for file in files:
-                ruta_archivo = os.path.join(root, file)
-                hd_files.add(ruta_archivo)
+                hd_files.add(os.path.join(root, file))
 
         # Forma el set con todos los archivos de todos los torrents
         referenced_files = set()
@@ -342,18 +354,18 @@ class worker:
         inode_map = build_inode_map(root_path)
         noHLs, addtag, deltag = set(), set(), set()
         for thash, torrent in torrents.items():
-            if torrent.get("category") not in noHL_cats:
-                continue
+            # if torrent.get("category") not in noHL_cats:
+                # continue
 
             tagged = noHL_tag in torrent.get("tags", "").split(", ")
 
-            if not torrent_has_HL(torrent, inode_map, translation_table):
+            if torrent.get("category") in noHL_cats and torrent.get("progress", 0) == 1 and not torrent_has_HL(torrent, inode_map, translation_table):
                 noHLs.add(thash)
                 if not tagged:
-                    logger.info(f"{self.name:<10} - new noHL: {torrent.get('name')}")
+                    logger.info(f"{self.name:<10} - noHL: {torrent.get('name')}")
                     addtag.add(thash)
             elif tagged:
-                logger.info(f"{self.name:<10} - new noHL: {torrent.get('name', 'Unknown')}")
+                logger.info(f"{self.name:<10} - found link for: {torrent.get('name', 'Unknown')}")
                 deltag.add(thash)
 
         if addtag: self.client.add_tags(addtag, noHL_tag)
@@ -400,7 +412,7 @@ class worker:
         for thash, torrent in torrents.items():
             tags = torrent.get("tags", "").split(", ")
             seeds = torrent.get('num_complete')
-            if torrent.get('state','') in ['pausedUP','pausedDL', 'error', 'unknown']: # filtramos solos los que estan normal XD
+            if torrent.get("progress", 0) != 1 or torrent.get('state','') in ['pausedUP','pausedDL', 'error', 'unknown']: # filtramos solos los que estan seeding XD
                 continue
             if seeds < min_seeds and isinstance(seeds, int):
                 if tag not in tags:
@@ -745,9 +757,11 @@ class worker:
             if not torrent:
                 logger.warning(f"{self.name:<10} - skipping hash {thash}. ")
                 continue
+
             tags = torrent.get("tags", "").split(", ")
             # find matching profile
             for profile_name, profile_config in profiles.items():
+                if torrent.get("progress", 0) != 1: continue
                 if (
                     ('category' in profile_config and not any(cat == torrent.get('category') for cat in profile_config['category']))
                     or ('include_all_tags' in profile_config and not all(tag in tags for tag in profile_config['include_all_tags']))
