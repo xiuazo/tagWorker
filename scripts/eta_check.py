@@ -35,7 +35,7 @@ def setup_logger():
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
-    logger = logging.getLogger("huno")
+    logger = logging.getLogger("eta_check")
     logger.setLevel(logging.INFO)
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
@@ -48,8 +48,9 @@ def setup_logger():
 logger = setup_logger()
 
 def completed(torrent):
+    unlimited = torrent.max_seeding_time < 0
     maxtime = torrent.max_seeding_time * 60 # API dice que en segundos. falso. devuelve minutos
-    return maxtime >= 0 and maxtime < torrent.seeding_time
+    return not unlimited and maxtime < torrent.seeding_time
 
 def get_clients():
     clients = {}
@@ -63,11 +64,11 @@ def get_clients():
         try:
             client.auth_log_in()
             clients[name] = client
-            logger.info(f"✅ Conectado a instancia {name} ({c['url']})")
+            logger.info(f"Conectado a {name} ({c['url']})")
         except qbittorrentapi.LoginFailed as e:
-                logger.warning(f"⚠️ Falló el login de {name}: {e}")
+                logger.warning(f"Falló el login a {name}: {e}")
         except Exception as e:
-            logger.error(f"❌ Error al conectar con {name} ({c['url']}): {e}")
+            logger.error(f"Error al conectar a {name} ({c['url']}): {e}")
     return clients
 
 if __name__ == "__main__":
@@ -79,7 +80,9 @@ if __name__ == "__main__":
         pause, resume = list(), list()
         for t in torrents:
             if t.progress != 1: continue # ignore incomplete torrents
-            paused = t.state == 'pausedUP'
+            # paused = t.state in ['pausedUP', 'stoppedUP']
+            paused = t.state_enum.is_paused #
+
             if completed(t):
                 if not paused and t.state not in ['forcedUP']:
                     pause.append(t)
