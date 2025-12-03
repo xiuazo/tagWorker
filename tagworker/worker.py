@@ -8,6 +8,7 @@ import schedule
 from collections import defaultdict
 from datetime import timedelta
 from pytimeparse2 import parse
+from fnmatch import fnmatch
 
 from .config import GlobalConfig
 from .logger import logger
@@ -226,69 +227,82 @@ class worker:
                 threading.Thread(target=self.task_tag).start()
             # if singlerun: break
 
-    def disk_orphans(self, dry_run = True):
-        root_path = self.folders.get('root_path')
-        orphan_path = self.folders.get('orphaned_path')
 
-        ignored = {
-            os.path.abspath(os.path.join(root_path, ig)) for ig in self.folders.get('orphaned_ignored', [])
-        }
+    def disk_orphans(self, dry_run=True):
+        root = os.path.abspath(self.folders["root_path"])
+        orphan = os.path.abspath(self.folders["orphaned_path"])
 
-        # Recorre el directorio de descargas, excluyendo el de huerfanos
+        # patrones absolutos + POSIX
+        pats = [
+            os.path.abspath(os.path.join(root, p)).replace(os.sep, "/")
+            for p in self.folders.get("orphaned_ignored", [])
+        ]
+
+        def ignored(path):
+            p = path.replace(os.sep, "/")
+            return any(fnmatch(p, pat) for pat in pats)
+
+        # recopilar archivos
         hd_files = set()
-        for root, dirs, files in os.walk(root_path):
-            # saltamos huerfanos
-            if root_path.startswith(orphan_path):
+
+        for r, dirs, files in os.walk(root):
+            r_abs = os.path.abspath(r)
+
+            if r_abs.startswith(orphan):
                 dirs[:] = []
                 continue
-            # filtrar directorios
+
+            # filtrar dirs ignorados
             dirs[:] = [
                 d for d in dirs
-                if not os.path.abspath(os.path.join(root, d)).startswith(orphan_path)
-                and not any(
-                    os.path.abspath(os.path.join(root, d)).startswith(ig)
-                    for ig in ignored
-                )
+                if not ignored(os.path.abspath(os.path.join(r, d)))
             ]
 
-            for file in files:
-                hd_files.add(os.path.join(root, file))
+            # añadir archivos no ignorados
+            for f in files:
+                full = os.path.abspath(os.path.join(r, f))
+                if not ignored(full):
+                    hd_files.add(full)
 
-        # Forma el set con todos los archivos de todos los torrents
-        referenced_files = set()
-        torrents = self.client.torrents
-        for thash, torrent in torrents.items():
-            translated = translate_path(torrent.get("content_path"), self.translation_table)
-            if os.path.isfile(translated):
-                files = {translated}
-            elif os.path.isdir(translated):
-                files = self.client.torrent_files(thash) # triggers API call
-                files = {translate_path(file, self.translation_table) for file in files}
-            else: # no existe el translated en el disco => errored/missing files torrent o descarga incompleta
-                if torrent.get('state') in ['error', 'missingFiles'] or torrent.get('progress', '100') != 100:
+        # archivos referenciados
+        referenced = set()
+        for thash, t in self.client.torrents.items():
+            p = translate_path(t.get("content_path"), self.translation_table)
+            if os.path.isfile(p):
+                files = {p}
+            elif os.path.isdir(p):
+                files = {
+                    translate_path(f, self.translation_table)
+                    for f in self.client.torrent_files(thash)
+                }
+            else:
+                if t.get("state") in ["error", "missingFiles"] or t.get("progress", 0) != 1:
                     continue
-                # TODO: torrent.state checks, error torrent tagging... ?
-                logger.warning(f"Missing file: {torrent.name} - {translated}")
-            if referenced_files & files:
-                logger.warning(f"{self.name:<10} - Tracker-dupe? {torrent.name} ({tldextract.extract(torrent.tracker).domain}) files belong to multiple torrents")
-            referenced_files.update(files)
+                logger.warning(f"Missing file: {t.name} - {p}")
+                continue
 
-        # Calcula los archivos huérfanos
-        orphaned_files = hd_files - referenced_files
-        if not len(orphaned_files):
+            if referenced & files:
+                logger.warning(
+                    f"{self.name:<10} - Tracker-dupe? {t.name} "
+                    f"({tldextract.extract(t.tracker).domain}) files belong to multiple torrents"
+                )
+
+            referenced |= files
+
+        # huérfanos
+        orphans = hd_files - referenced
+        if not orphans:
             return
 
-        # TODO
-        # if len(orphaned_files) > 10:
-        #     return
-        logger.info(f'%-10s - {len(orphaned_files)} orphan files moved to {orphan_path}', self.name)
-        for file in sorted(orphaned_files):
-            if not dry_run:
-                move_to_dir(root_path, orphan_path, file)
-                logger.info(f"%-10s - moved {file} to {orphan_path}", self.name)
+        logger.info(f"{self.name:<10} - {len(orphans)} orphan files moved to {orphan}")
+
+        for f in sorted(orphans):
+            if dry_run:
+                logger.info(f"{self.name:<10} - *** DRY-RUN *** moved {f} to {orphan}")
             else:
-                logger.info(f"%-10s - *** DRY-RUN *** moved {file} to {orphan_path}", self.name)
-        # remove_empty_dirs(root_path, url)
+                move_to_dir(root, orphan, f)
+                logger.info(f"{self.name:<10} - moved {f} to {orphan}")
+
 
     def disk_prune_old(self, dry_run = True):
         path = self.folders.get('orphaned_path')
