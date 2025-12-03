@@ -6,3 +6,4 @@ bencodepy
 qbittorrent-api
 portalocker
 schedule
+dotenv
