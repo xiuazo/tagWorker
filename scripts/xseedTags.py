@@ -158,9 +158,9 @@ def tag_name(folder):
 
 def apply_tags(session, tag_queue):
     total = 0
-    for tag, hashes in tag_queue.items():
-        session.torrents_add_tags(tag_name(tag), hashes)
-        count = len(hashes)
+    for tag, simpleset in tag_queue.items():
+        session.torrents_add_tags(tag_name(tag), {t.hash for t in simpleset})
+        count = len(simpleset)
         print(f"Tagged {count} torrents '{tag}'")
         total += count
     print(f'Tagged {total} torrents')
@@ -174,14 +174,13 @@ def main():
     else:
         inode_dict = build_inode_dict(ROOTDIR)
         tag_queue, xseed_only = process_torrents(torrents, inode_dict)
-        apply_tags(qbt_client, tag_queue)
         if xseed_only:
             announced = set()
             for t in xseed_only:
                 if t.name not in announced: print(f"Torrent {t.name} only in {XSEEDFOLDER} folder")
                 announced.add(t.name)
             qbt_client.torrents_add_tags({XS_ORPHAN_TAG}, {t.hash for t in xseed_only})
-
+        apply_tags(qbt_client, tag_queue)
 
 if __name__ == "__main__":
     main()
