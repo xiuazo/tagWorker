@@ -158,9 +158,9 @@ def tag_name(folder):
 
 def apply_tags(session, tag_queue):
     total = 0
-    for tag, hashes in tag_queue.items():
-        session.torrents_add_tags(tag_name(tag), hashes)
-        count = len(hashes)
+    for tag, simpleset in tag_queue.items():
+        session.torrents_add_tags(tag_name(tag), {t.hash for t in simpleset})
+        count = len(simpleset)
         print(f"Tagged {count} torrents '{tag}'")
         total += count
     print(f'Tagged {total} torrents')
