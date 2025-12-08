@@ -14,7 +14,8 @@ load_dotenv(dotenv_path, override=True)
 # ---------------- LOGGER ----------------
 def setup_logger():
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    log_dir = os.path.join(base_dir, "logs")
+    log_dir = os.path.join(base_dir, "..", "logs")  # → ../logs/
+    log_dir = os.path.abspath(log_dir)              # Normaliza la ruta
     os.makedirs(log_dir, exist_ok=True)
 
     script_name = os.path.splitext(os.path.basename(__file__))[0]  # → "blah"
@@ -34,7 +35,7 @@ def setup_logger():
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
-    logger = logging.getLogger("huno")
+    logger = logging.getLogger("seedsize")
     logger.setLevel(logging.INFO)
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
@@ -101,7 +102,7 @@ def print_tracker_sizes(stats):
     sorted_stats = dict(sorted(stats.items(), key=lambda item: item[1].size, reverse=True))
 
     for name, tracker in sorted_stats.items():
-        print(f"{name} ({tracker.count}): {human_readable_size(tracker.size)}")
+        logger.info(f"{name} ({tracker.count}): {human_readable_size(tracker.size)}")
 
 def main():
     allt = []
