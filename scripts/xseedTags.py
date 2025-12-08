@@ -17,18 +17,20 @@ ROOTDIR = os.getenv('TORRENTS_PATH') # ruta al torrentdir real en el disco, comp
 QBIT_ROOTFOLDER = os.getenv('TRANSLATED_TORRENTS_PATH') # ruta al torrentdir tal cual la ve qbit
 
 TORRENT_CATEGORY = os.getenv('XSEED_CATEGORY', "cross-seed-link")
-XSEEDFOLDER = os.getenv('XSEED_LINKDIR', ".linkDir")
+XSEED_FOLDER = os.getenv('XSEED_LINKDIR', ".linkDir")
 ORPHANFOLDER = os.getenv('ORPHANED_PATH', ".orphaned_data")
-CROSS_SEED_TAG = os.getenv('XSEED_TAG', "cross-seed")
+XSEED_TAG = os.getenv('XSEED_TAG', "cross-seed")
 PREFIX_TAG = os.getenv('XSEED_TAG_PREFIX', "")
 POSTFIX_TAG = os.getenv('XSEED_TAG_POSTFIX', ".cross-seed")
-XS_ORPHAN_TAG = os.getenv('XSEED_TAG_ORPHAN', f"@{XSEEDFOLDER}-only")
+XS_ORPHAN_TAG = os.getenv('XSEED_TAG_ORPHAN', f"@{XSEED_FOLDER}-only")
 
 # ---------------- LOGGER ----------------
 def setup_logger():
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    log_dir = os.path.join(base_dir, "logs")
+    log_dir = os.path.join(base_dir, "..", "logs")  # → ../logs/
+    log_dir = os.path.abspath(log_dir)              # Normaliza la ruta
     os.makedirs(log_dir, exist_ok=True)
+
 
     script_name = os.path.splitext(os.path.basename(__file__))[0]  # → "blah"
     log_file = os.path.join(log_dir, f"{script_name}.log")
@@ -131,11 +133,11 @@ def process_torrents(torrents, inode_dict):
                         top_level_folder = get_top_level_folder(hardlink_relative_path)
                         hardlink_folders.add(top_level_folder)
                 except FileNotFoundError:
-                    print(f" - {real_path} (File not found): ")
+                    logger.warning(f" - {real_path} (File not found): ")
                 except ValueError as e:
-                    print(f" - Skipped invalid path: {hardlink_relative_path} ({e})")
+                    logger.warning(f" - Skipped invalid path: {hardlink_relative_path} ({e})")
 
-            hardlink_folders.discard(XSEEDFOLDER)
+            hardlink_folders.discard(XSEED_FOLDER)
             hardlink_folders.discard(ORPHANFOLDER)
 
             if not hardlink_folders:
@@ -143,13 +145,13 @@ def process_torrents(torrents, inode_dict):
                 continue
 
             for folder in hardlink_folders:
-                if tag_name(folder) not in torrent.tags or CROSS_SEED_TAG not in torrent.tags:
+                if tag_name(folder) not in torrent.tags or XSEED_TAG not in torrent.tags.split(", "):
                     tag_queue[folder].add(simple)
             if len(hardlink_folders) > 1:
-                print(f"WARNING: Torrent {torrent.name} links to {len(hardlink_folders)} folders: {', '.join(hardlink_folders)}")
+                logger.warning(f"WARNING: Torrent {torrent.name} links to {len(hardlink_folders)} folders: {', '.join(hardlink_folders)}")
 
         except ConnectionError as e:
-            print(f"Error processing torrent '{torrent.name}': {e}")
+            logger.warning(f"Error processing torrent '{torrent.name}': {e}")
 
     return tag_queue, xseed_only
 
@@ -159,28 +161,30 @@ def tag_name(folder):
 def apply_tags(session, tag_queue):
     total = 0
     for tag, simpleset in tag_queue.items():
-        session.torrents_add_tags(tag_name(tag), {t.hash for t in simpleset})
+        session.torrents_add_tags({tag_name(tag), XSEED_TAG}, {t.hash for t in simpleset})
         count = len(simpleset)
-        print(f"Tagged {count} torrents '{tag}'")
+        logger.info(f"Tagged {count} torrents '{tag}'")
         total += count
-    print(f'Tagged {total} torrents')
+    logger.info(f'Tagged {total} torrents')
 
 def main():
     qbt_client = get_clients()
     torrents = qbt_client.torrents_info(category=TORRENT_CATEGORY)
 
     if not torrents:
-        print(f"No torrents found in category '{TORRENT_CATEGORY}'.")
+        logger.info(f"No torrents found in category '{TORRENT_CATEGORY}'.")
     else:
         inode_dict = build_inode_dict(ROOTDIR)
         tag_queue, xseed_only = process_torrents(torrents, inode_dict)
+        apply_tags(qbt_client, tag_queue)
+
+        qbt_client.torrents_delete_tags(XS_ORPHAN_TAG)
         if xseed_only:
+            qbt_client.torrents_add_tags({XS_ORPHAN_TAG}, {t.hash for t in xseed_only})
             announced = set()
             for t in xseed_only:
-                if t.name not in announced: print(f"Torrent {t.name} only in {XSEEDFOLDER} folder")
+                if t.name not in announced: logger.info(f"Torrent {t.name} only in {XSEED_FOLDER} folder")
                 announced.add(t.name)
-            qbt_client.torrents_add_tags({XS_ORPHAN_TAG}, {t.hash for t in xseed_only})
-        apply_tags(qbt_client, tag_queue)
 
 if __name__ == "__main__":
     main()
