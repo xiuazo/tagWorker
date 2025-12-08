@@ -15,7 +15,8 @@ AUTO_RESUME = True
 # ---------------- LOGGER ----------------
 def setup_logger():
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    log_dir = os.path.join(base_dir, "logs")
+    log_dir = os.path.join(base_dir, "..", "logs")  # → ../logs/
+    log_dir = os.path.abspath(log_dir)              # Normaliza la ruta
     os.makedirs(log_dir, exist_ok=True)
 
     script_name = os.path.splitext(os.path.basename(__file__))[0]  # → "blah"
