@@ -10,7 +10,7 @@ def is_file(content_path):
         return True
     return None
 
-def translate_path(fullpath, translation_table):
+def translate_path(fullpath: str, translation_table: dict) -> str:
     path = fullpath
     for original, translated in translation_table.items():
         if fullpath.startswith(original):
@@ -32,7 +32,7 @@ def move_to_dir(root_path, orphaned_path, file):
         logger.info(f"Path for {file} not in {root_path}")
 
 def build_inode_map(path):
-    inode_map = defaultdict(int)
+    inode_map: defaultdict[int, int] = defaultdict(int)
 
     for dirpath, _, filenames in os.walk(path):
         for name in filenames:

@@ -16,10 +16,9 @@ def deep_merge(target, source):
             #     print(f'Valor vacio para clave {key}')
     return target
 
-class qBit:
+class qBit(qbittorrentapi.Client):
     def __init__(self, url, user, pwd):
-        self.__client = qbittorrentapi.Client(host=url, username=user, password=pwd)
-
+        super().__init__(host=url, username=user, password=pwd)
         self.__rid = None
         self.__sync_data = None
         self.__state = dict()
@@ -29,11 +28,7 @@ class qBit:
         return self.__rid is not None
 
     @property
-    def client(self):
-        return self.__client
-
-    @property
-    def torrents(self):
+    def torrentdict(self):
         return self.__state.get('torrents', {})
 
     @property
@@ -44,13 +39,13 @@ class qBit:
     def status(self):
         return self.__state
 
-    def sync(self, fullsync = False):
-        if fullsync: self.client.sync.maindata.reset_rid()
-        sync_data = self.client.sync.maindata.delta()
+    def do_sync(self, fullsync = False):
+        if fullsync: self.sync.maindata.reset_rid()
+        sync_data = self.sync.maindata.delta()
 
         full_update = sync_data.get("full_update", False)
         # torrents = sync_data.get("torrents", {})
-        torrents_removed = sync_data.get("torrents_removed", {})
+        torrents_removed = list(sync_data.get("torrents_removed", []))
         # categories = sync_data.get("categories", {})
         # categories_removed = sync_data.get("categories_removed", {})
         # tags = sync_data.get("tags", {})
@@ -80,46 +75,43 @@ class qBit:
 
     def login(self):
         try:
-            self.client.auth_log_in()
+            self.auth_log_in()
         except qbittorrentapi.LoginFailed as e:
             raise
 
-    def logout(self):
-        self.client.auth_log_out()
-
     def add_tags(self, hashes, tag):
-        self.client.torrent_tags.add_tags(tag, hashes)
+        self.torrent_tags.add_tags(tag, hashes)
 
     def remove_tags(self, hashes, tags):
-        self.client.torrent_tags.remove_tags(tags, hashes)
+        self.torrent_tags.remove_tags(tags, hashes)
 
     # @property
     def torrent_files(self, thash):
         # Si es un archivo único, devuelve su ruta
-        torrent = self.torrents[thash]
+        torrent = self.__state.get('torrents', {}).get(thash)
         content_path = torrent.get('content_path', '')
         # FIXME: no aplica translation path, por lo que nunca existe si vamos a buscarlo al disco.
         if is_file(content_path):
             return {content_path}
 
         filelist = set()
-        files = self.client.torrents.files(thash)
+        files = self.torrents_files(thash)
         for file in files:
             # WARNING windows necesita normalizacion o uniria el path con el filename mediante /
             filelist.add(os.path.join(torrent.get('save_path'), file.name))
         return filelist
 
     def delete_tags(self, tags):
-        self.client.torrent_tags.delete_tags(tags)
+        self.torrent_tags.delete_tags(tags)
 
     def force_start(self, hashes):
-        self.client.torrents.set_force_start(hashes)
+        self.torrents.set_force_start(hashes)
 
     def resume_torrents(self, hashes):
-        self.client.torrents.resume(hashes)
+        self.torrents.resume(hashes)
 
     def enable_tmm(self, hashes):
-        self.client.torrents.set_auto_management(hashes)
+        self.torrents.set_auto_management(hashes)
 
     def sharelimit(self, hashes, limits):
         limit = {
@@ -128,10 +120,10 @@ class qBit:
             'seeding_time_limit': limits['time'] if limits['time'] is not None else -2,
             'inactive_seeding_time_limit': -2
         }
-        self.client.torrents.set_share_limits(**limit)
+        self.torrents.set_share_limits(**limit)
 
     def uploadlimit(self, hashes, limit):
-        self.client.torrents_set_upload_limit(limit*1024, hashes)
+        self.torrents_set_upload_limit(limit*1024, hashes)
 
 # =================================================================
 
@@ -139,8 +131,7 @@ class qBit:
     #     return self.client.torrents_info()
 
     def get_trackers(self, thash):
-        return self.client.torrents.trackers(thash)
+        return self.torrents.trackers(thash)
 
     def start(self, thashes):
-        return self.client.torrents_start(thashes)
-        pass
+        return self.torrents_start(thashes)
