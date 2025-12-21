@@ -794,16 +794,18 @@ class worker:
             profiles_dict[profile_name] = set()
             tagdict[tagname] = set()
 
+        # CLASIFICAR TORRENTS
         for thash, torrent in torrents.items():
             if not torrent:
                 logger.warning(f"{self.name:<10} - skipping hash {thash}. ")
                 continue
+            # no categorizo si no está completo
+            if torrent.get("progress", 0) != 1: continue
 
             tags = torrent.get("tags", "").split(", ")
             # find matching profile
             for profile_name, profile_config in profiles.items():
                 pc = dict(profile_config)
-                if torrent.get("progress", 0) != 1: continue
                 if (
                     ('category' in pc and not any(cat == torrent.get('category') for cat in pc['category']))
                     or ('include_all_tags' in pc and not all(tag in tags for tag in pc['include_all_tags']))
@@ -819,10 +821,9 @@ class worker:
                 profiles_dict[profile_name].add(thash)
                 break
 
+        # DICCIONARIOS PARA TAGUEADO, DESTAGUEADO
         addtag = defaultdict(set)
         deltag = defaultdict(set)
-        resume = set()
-
         for sltag, hashes in tagdict.items():
             for thash in hashes:
                 torrent = torrents[thash]
@@ -837,7 +838,10 @@ class worker:
                     logger.debug(f"{self.name:<10} - removing tag {sltag} from {torrent.get('name')}")
                     deltag[sltag].add(thash)
 
+        # APLICACION DE SHARELIMITS Y GENERACION DE LISTA PARA RESUME
         sharelimits_changed = 0
+        resume = set()
+        delete = set()
         for group_name, hashes in profiles_dict.items():
             tagname = profiles[group_name].get('custom_tag', tagprefix + group_name)
             # logger.debug(f"{self.name:<10} - {len(hashes)} torrents {tagname}")
@@ -846,7 +850,8 @@ class worker:
             p_maxratio = profiles[group_name].get('max_ratio', -2)
             p_maxtime = profiles[group_name].get('max_seeding_time', -2)
             p_uplimit = profiles[group_name].get('upload_limit', -2)
-            p_autoresume = profiles[group_name].get('auto_resume', True)
+            p_autoresume = profiles[group_name].get('auto_resume', True) # ? buen default??
+            p_autodelete = profiles[group_name].get('auto_delete', False)
 
             if parse(p_maxtime) > 0:
                 p_maxtime = int((parse(p_maxtime) / 60))
@@ -867,18 +872,26 @@ class worker:
                     logger.debug(f"{self.name:<10} - Changing {torrent.get('name')} sharelimit to {group_name} profile.")
                     fix_hashes.add(h)
 
+                maxtime = torrent['max_seeding_time'] * 60
+                completed = maxtime >= 0 and maxtime < torrent['seeding_time']
                 if p_autoresume:
-                    maxtime = torrent['max_seeding_time'] * 60
-                    completed = maxtime >= 0 and maxtime < torrent['seeding_time']
                     if torrent.get('state') == 'pausedUP' and not completed:
+                        # FIXME
                         logger.debug(f"{self.name:<10} - Resuming {torrent.get('name')}.")
                         resume.add(h)
+
+                if p_autodelete:
+                    if completed and torrent.get('state') == 'pausedUP':
+                        logger.debug(f"Torrent {torrent.get('name')} autodeleted.")
+                        delete.add(h)
+
 
             if len(fix_hashes):
                 sharelimits_changed += len(fix_hashes)
                 self.client.sharelimit(fix_hashes, limits)
                 self.client.uploadlimit(fix_hashes, p_uplimit)
 
+        # APLICACION DE TAGS Y RESUME
         tags_changed = 0
         for sltag, hashes in addtag.items():
             self.client.add_tags(hashes, sltag)
@@ -888,6 +901,8 @@ class worker:
             tags_changed += len(hashes)
         if resume:
             self.client.start(resume)
+        if delete:
+            self.client.add_tags(delete, "!DELETE")
 
         if tags_changed:
             logger.info(f"{self.name:<10} - {tags_changed} tags changed")
