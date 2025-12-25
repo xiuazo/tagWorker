@@ -2,9 +2,12 @@ import os
 import json
 import sys
 import logging
+
+from pathlib import Path
+
 from logging.handlers import TimedRotatingFileHandler
 
-import qbittorrentapi
+from qbittorrentapi import Client, LoginFailed
 from collections import defaultdict, namedtuple
 from dotenv import load_dotenv
 
@@ -13,8 +16,8 @@ dotenv_path = os.path.join(script_dir, '.env')
 load_dotenv(dotenv_path, override=True)
 
 # Configuration variables
-ROOTDIR = os.getenv('TORRENTS_PATH') # ruta al torrentdir real en el disco, completa
-QBIT_ROOTFOLDER = os.getenv('TRANSLATED_TORRENTS_PATH') # ruta al torrentdir tal cual la ve qbit
+ROOTDIR = Path(os.getenv('TORRENTS_PATH', "")).resolve() # ruta al torrentdir real en el disco, completa
+QBIT_ROOTFOLDER = Path(os.getenv('TRANSLATED_TORRENTS_PATH', "")).resolve() # ruta al torrentdir tal cual la ve qbit
 
 TORRENT_CATEGORY = os.getenv('XSEED_CATEGORY', "cross-seed-link")
 XSEED_FOLDER = os.getenv('XSEED_LINKDIR', ".linkDir")
@@ -62,55 +65,47 @@ def setup_logger():
 logger = setup_logger()
 
 
-def get_clients():
-    clients = {}
-
-    # Obtiene y parsea el JSON
-    defined_clients = json.loads(os.getenv("QBIT_CLIENTS", "[]"))
-
-    for c in defined_clients:
-        name = c.get('name')
-        client = qbittorrentapi.Client(host=c['url'], username=c['user'], password=c['pass'])
-        try:
-            client.auth_log_in()
-            clients[name] = client
-            logger.info(f"✅ Conectado a instancia {name} ({c['url']})")
-        except qbittorrentapi.LoginFailed as e:
-                logger.warning(f"⚠️ Falló el login de {name}: {e}")
-        except Exception as e:
-            logger.error(f"❌ Error al conectar con {name} ({c['url']}): {e}")
-        finally:
-            return client
-    return clients
+def init_clients(config):
+    name = config.get('name')
+    client = Client(host=config['url'], username=config['user'], password=config['pass'])
+    try:
+        client.auth_log_in()
+        logger.info(f"✅ Conectado a instancia {name} ({config['url']})")
+    except LoginFailed as e:
+        logger.warning(f"⚠️ Falló el login de {name}: {e}")
+    except Exception as e:
+        logger.error(f"❌ Error al conectar con {name} ({config['url']}): {e}")
+    finally:
+        return client
 
 
-def build_inode_dict(rootdir):
+def build_inode_dict(rootdir: Path):
     inode_dict = {}
-    for dirpath, _, filenames in os.walk(rootdir):
-        for filename in filenames:
-            filepath = os.path.join(dirpath, filename)
+    for path in rootdir.rglob('*'):  # recorre recursivamente
+        if path.is_file():
             try:
-                inode = os.stat(filepath).st_ino
-                if inode not in inode_dict:
-                    inode_dict[inode] = []
-                inode_dict[inode].append(filepath)
+                inode = path.stat().st_ino
+                inode_dict.setdefault(inode, []).append(path)
             except FileNotFoundError:
                 continue
     return inode_dict
 
 
-def translate_path(qbit_path):
-    if QBIT_ROOTFOLDER and qbit_path.startswith(QBIT_ROOTFOLDER):
-        relative_path = os.path.relpath(qbit_path, QBIT_ROOTFOLDER)
-        return os.path.normpath(os.path.join(ROOTDIR, relative_path))
-    return os.path.normpath(qbit_path)
+def translate_path(qbit_path: str) -> Path:
+    qbit = Path(qbit_path)
+
+    try:
+        relative = qbit.relative_to(QBIT_ROOTFOLDER)
+        return (ROOTDIR / relative).resolve()
+    except ValueError:
+        return qbit.resolve()
 
 
-def get_top_level_folder(relative_path):
-    parts = os.path.normpath(relative_path).split(os.sep)
-    if parts and parts[0]:
-        return parts[0]
-    raise ValueError("Invalid or empty relative path.")
+def get_top_level_folder(relative_path: Path | str) -> str:
+    p = Path(relative_path)
+    if not p.parts:
+        raise ValueError("Invalid or empty relative path.")
+    return p.parts[0]
 
 
 def process_torrents(torrents, inode_dict):
@@ -123,19 +118,19 @@ def process_torrents(torrents, inode_dict):
         try:
             hardlink_folders = set()
             for file in torrent.files:
-                qbit_path = os.path.normpath(os.path.join(torrent.save_path, file.name))
+                qbit_path = Path(torrent.save_path) / file.name
                 real_path = translate_path(qbit_path)
                 try:
-                    inode = os.stat(real_path).st_ino
-                    hardlinks = inode_dict.get(inode)
-                    for hardlink in hardlinks:
-                        hardlink_relative_path = os.path.relpath(hardlink, ROOTDIR)
-                        top_level_folder = get_top_level_folder(hardlink_relative_path)
-                        hardlink_folders.add(top_level_folder)
+                    inode = real_path.stat().st_ino
+                    for hardlink in inode_dict.get(inode, []):
+                        hardlink_path = Path(hardlink)
+                        hardlink_relative = hardlink_path.relative_to(ROOTDIR)
+                        top_folder = get_top_level_folder(hardlink_relative)
+                        hardlink_folders.add(top_folder)
                 except FileNotFoundError:
-                    logger.warning(f" - {real_path} (File not found): ")
+                    logger.warning(f" - {real_path} (File not found)")
                 except ValueError as e:
-                    logger.warning(f" - Skipped invalid path: {hardlink_relative_path} ({e})")
+                    logger.warning(f" - Skipped invalid path: {hardlink_relative} ({e})")
 
             hardlink_folders.discard(XSEED_FOLDER)
             hardlink_folders.discard(ORPHANFOLDER)
@@ -145,7 +140,8 @@ def process_torrents(torrents, inode_dict):
                 continue
 
             for folder in hardlink_folders:
-                if tag_name(folder) not in torrent.tags or XSEED_TAG not in torrent.tags.split(", "):
+                existing_tags = set(torrent.tags.split(", "))
+                if tag_name(folder) not in torrent.tags or XSEED_TAG not in existing_tags:
                     tag_queue[folder].add(simple)
             if len(hardlink_folders) > 1:
                 logger.warning(f"WARNING: Torrent {torrent.name} links to {len(hardlink_folders)} folders: {', '.join(hardlink_folders)}")
@@ -158,6 +154,7 @@ def process_torrents(torrents, inode_dict):
 def tag_name(folder):
     return f"{PREFIX_TAG}{folder}{POSTFIX_TAG}"
 
+
 def apply_tags(session, tag_queue):
     total = 0
     for tag, simpleset in tag_queue.items():
@@ -167,8 +164,9 @@ def apply_tags(session, tag_queue):
         total += count
     logger.info(f'Tagged {total} torrents')
 
+
 def main():
-    qbt_client = get_clients()
+    qbt_client = init_clients(json.loads(os.getenv("QBIT_CLIENTS", "[]"))[0])
     torrents = qbt_client.torrents_info(category=TORRENT_CATEGORY)
 
     if not torrents:
@@ -185,6 +183,7 @@ def main():
             for t in xseed_only:
                 if t.name not in announced: logger.info(f"Torrent {t.name} only in {XSEED_FOLDER} folder")
                 announced.add(t.name)
+
 
 if __name__ == "__main__":
     main()

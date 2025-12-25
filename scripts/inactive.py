@@ -40,7 +40,7 @@ def setup_logger():
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
-    logger = logging.getLogger("huno")
+    logger = logging.getLogger("inactive")
     logger.setLevel(logging.INFO)
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)

@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 # Configuración
 TAG_NAME = "@COLLISION"  # Nombre de la etiqueta para torrents con conflictos
 
-
 script_dir = os.path.dirname(os.path.abspath(__file__))
 dotenv_path = os.path.join(script_dir, '.env')
 load_dotenv(dotenv_path, override=True)
@@ -39,7 +38,7 @@ def setup_logger():
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
-    logger = logging.getLogger("huno")
+    logger = logging.getLogger("collision")
     logger.setLevel(logging.INFO)
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
@@ -52,26 +51,20 @@ def setup_logger():
 
 logger = setup_logger()
 
-def get_clients():
-    clients = {}
 
-    # Obtiene y parsea el JSON
-    defined_clients = json.loads(os.getenv("QBIT_CLIENTS", "[]"))
+def qbit_client_init(qb_config) -> qbittorrentapi.Client:
+    try:
+        client = qbittorrentapi.Client(host=qb_config.get('url'), username=qb_config.get('user'), password=qb_config.get('pass'))
+        client.auth_log_in()
+        logger.info(f"✅ Conectado a instancia {qb_config.get('name')} ({qb_config['url']})")
+    except qbittorrentapi.LoginFailed as e:
+        logger.warning(f"⚠️ Falló el login de {qb_config.get('name')}: {e}")
+        raise e
+    except Exception as e:
+        logger.error(f"❌ Error al conectar con {qb_config.get('name')} ({qb_config['url']}): {e}")
+        raise e
 
-    for c in defined_clients:
-        name = c.get('name')
-        client = qbittorrentapi.Client(host=c['url'], username=c['user'], password=c['pass'])
-        try:
-            client.auth_log_in()
-            clients[name] = client
-            logger.info(f"✅ Conectado a instancia {name} ({c['url']})")
-        except qbittorrentapi.LoginFailed as e:
-                logger.warning(f"⚠️ Falló el login de {name}: {e}")
-        except Exception as e:
-            logger.error(f"❌ Error al conectar con {name} ({c['url']}): {e}")
-        finally:
-            return client
-    return clients
+    return client
 
 
 def find_duplicate_files(torrents):
@@ -100,7 +93,9 @@ def find_duplicate_files(torrents):
     return {k: duplicates[k] for k in sorted(duplicates)}
 
 def main():
-    qbt_client = get_clients()
+    qbt_client = qbit_client_init(
+        json.loads(os.getenv("QBIT_CLIENTS", "[]"))[0]
+    )
 
     torrents = qbt_client.torrents_info()
     duplicates = find_duplicate_files(torrents)

@@ -1,17 +1,18 @@
-import qbittorrentapi
-from dotenv import load_dotenv
 import json
 import os
 import logging
+from pathlib import Path
+from dotenv import load_dotenv
 from logging.handlers import TimedRotatingFileHandler
+import qbittorrentapi
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 dotenv_path = os.path.join(script_dir, '.env')
 load_dotenv(dotenv_path, override=True)
 
 # CONFIG
-ROOTDIR = os.getenv('TORRENTS_PATH') # ruta al torrentdir real en el disco, completa
-QBITTORRENT_ROOTFOLDER = os.getenv('TRANSLATED_TORRENTS_PATH') # ruta al torrentdir tal cual la ve qbit
+ROOTDIR = Path(os.getenv('TORRENTS_PATH', "")).resolve() # ruta al torrentdir real en el disco, completa
+QBIT_ROOT = Path(os.getenv('TRANSLATED_TORRENTS_PATH', "")).resolve() # ruta al torrentdir tal cual la ve qbit
 ERRORED_TAG = "@ERRORED"
 AUTOPAUSE_MISSING = True
 AUTOPAUSE_SIZE_MISSMATCH = False
@@ -57,78 +58,80 @@ def setup_logger():
 
 logger = setup_logger()
 
-def get_clients():
-    clients = {}
 
-    # Obtiene y parsea el JSON
-    defined_clients = json.loads(os.getenv("QBIT_CLIENTS", "[]"))
+def qbit_client_init(qb_config) -> qbittorrentapi.Client:
+    try:
+        client = qbittorrentapi.Client(host=qb_config.get('url'), username=qb_config.get('user'), password=qb_config.get('pass'))
+        client.auth_log_in()
+        logger.info(f"✅ Conectado a instancia {qb_config.get('name')} ({qb_config['url']})")
+    except qbittorrentapi.LoginFailed as e:
+        logger.warning(f"⚠️ Falló el login de {qb_config.get('name')}: {e}")
+        raise e
+    except Exception as e:
+        logger.error(f"❌ Error al conectar con {qb_config.get('name')} ({qb_config['url']}): {e}")
+        raise e
 
-    for c in defined_clients:
-        name = c.get('name')
-        client = qbittorrentapi.Client(host=c['url'], username=c['user'], password=c['pass'])
-        try:
-            client.auth_log_in()
-            clients[name] = client
-            logger.info(f"✅ Conectado a instancia {name} ({c['url']})")
-        except qbittorrentapi.LoginFailed as e:
-                logger.warning(f"⚠️ Falló el login de {name}: {e}")
-        except Exception as e:
-            logger.error(f"❌ Error al conectar con {name} ({c['url']}): {e}")
-        finally:
-            return client
-    return clients
+    return client
 
 
-def normalize_path(path):
-    return os.path.normpath(path)
+def translate_path(qbit_path: str) -> Path:
+    qbit = Path(qbit_path)
 
-def translate_path(qbit_path):
-    if QBITTORRENT_ROOTFOLDER and qbit_path.startswith(QBITTORRENT_ROOTFOLDER):
-        relative_path = os.path.relpath(qbit_path, QBITTORRENT_ROOTFOLDER)
-        return normalize_path(os.path.join(ROOTDIR, relative_path))
-    return normalize_path(qbit_path)
+    try:
+        relative = qbit.relative_to(QBIT_ROOT)
+        return (ROOTDIR / relative).resolve()
+    except ValueError:
+        return qbit.resolve()
 
-def check_torrent_errors(torrent):
-    errored = NOERROR
 
-    if torrent.progress != 1: return NOERROR
-    files = torrent.files
-    for file in files:
-        # Omitir archivos que no fueron seleccionados para descarga
-        if file.priority == 0:
+def check_torrent_status(torrent):
+    if torrent.progress != 1: # ignore incomplete torrents
+        return NOERROR
+
+    for file in torrent.files:
+        if file.priority == 0: # skip file download
             continue
 
-        qbit_file_path = normalize_path(os.path.join(torrent.save_path, file.name))
+        qbit_file_path = os.path.join(torrent.save_path, file.name)
         real_file_path = translate_path(qbit_file_path)
 
-        if not os.path.isfile(real_file_path):
+        if not real_file_path.is_file():
             logger.info(f"Missing files: {torrent.name}")
-            errored = ERROR_MISSING
-            break
-        elif os.path.getsize(real_file_path) != file.size:
-            logger.info(f"Size missmatch: {torrent.name}")
-            errored = ERROR_SIZE
-            break
+            return ERROR_MISSING
 
-    return errored
+        stat = real_file_path.stat()
 
-if __name__ == "__main__":
-    qbt_client = get_clients()
+        if file.progress == 1.0 and stat.st_blocks == 0:
+            logger.info(f"File not materialized on disk: {torrent.name}")
+            return ERROR_SIZE
+
+    return NOERROR
+
+
+def main():
+    qbt_client = qbit_client_init(
+        json.loads(os.getenv("QBIT_CLIENTS", "[]"))[0]
+    )
     torrents = qbt_client.torrents_info()
 
     errored_hashes = set()
     pauselist = set()
     for torrent in torrents:
-        result = check_torrent_errors(torrent)
-        if result != NOERROR:
-            errored_hashes.add(torrent.hash)
-            if (
-                (result == ERROR_MISSING and AUTOPAUSE_MISSING)
-                or (result == ERROR_SIZE and AUTOPAUSE_SIZE_MISSMATCH)
-                ):
-                pauselist.add(torrent.hash)
+        torrent_status = check_torrent_status(torrent)
+        if torrent_status == NOERROR:
+            continue
+        errored_hashes.add(torrent.hash)
+        if (
+            (torrent_status == ERROR_MISSING and AUTOPAUSE_MISSING)
+            or (torrent_status == ERROR_SIZE and AUTOPAUSE_SIZE_MISSMATCH)
+            ):
+            pauselist.add(torrent.hash)
 
     qbt_client.torrents_add_tags(ERRORED_TAG, errored_hashes)
     qbt_client.torrents_stop(pauselist)
 
     logger.info(f"Torrents con errores: {len(errored_hashes)}. Pausados: {len(pauselist)}")
+
+
+if __name__ == "__main__":
+    main()

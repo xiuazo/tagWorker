@@ -1,9 +1,9 @@
-import qbittorrentapi
-import logging
-from logging.handlers import TimedRotatingFileHandler
-import json
-from dotenv import load_dotenv
 import os
+import json
+import logging
+from dotenv import load_dotenv
+from logging.handlers import TimedRotatingFileHandler
+from qbittorrentapi import Client, TorrentState, LoginFailed
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 dotenv_path = os.path.join(script_dir, '.env')
@@ -48,58 +48,73 @@ def setup_logger():
 
 logger = setup_logger()
 
-def completed(torrent):
-    unlimited = torrent.max_seeding_time < 0
+
+def is_completed(torrent):
+    if torrent.max_seeding_time < 0:
+        return False
     maxtime = torrent.max_seeding_time * 60 # API dice que en segundos. falso. devuelve minutos
-    return not unlimited and maxtime < torrent.seeding_time
+    return torrent.seeding_time >= maxtime
 
-def get_clients():
-    clients = {}
 
-    # Obtiene y parsea el JSON
-    defined_clients = json.loads(os.getenv("QBIT_CLIENTS", "[]"))
-
-    for c in defined_clients:
+def init_clients(client_definitions) -> list[Client]:
+    clients = []
+    for c in client_definitions:
         name = c.get('name')
-        client = qbittorrentapi.Client(host=c['url'], username=c['user'], password=c['pass'])
+        client = Client(host=c['url'], username=c['user'], password=c['pass'])
         try:
             client.auth_log_in()
-            clients[name] = client
+            clients.append(client)
             logger.info(f"Conectado a {name} ({c['url']})")
-        except qbittorrentapi.LoginFailed as e:
-                logger.warning(f"Falló el login a {name}: {e}")
+        except LoginFailed as e:
+            logger.warning(f"Falló el login a {name}: {e}")
         except Exception as e:
-            logger.error(f"Error al conectar a {name} ({c['url']}): {e}")
+            logger.warning(f"Error al conectar a {name} ({c['url']}): {e}")
     return clients
 
-if __name__ == "__main__":
-    clients = get_clients()
 
-    for qbt_client in clients.values(): #with qbittorrentapi.Client() as qbt_client:
+def classify_torrents(torrents):
+    pause_list, resume_list = list(), list()
+    for torrent in torrents:
+        if torrent.progress != 1: continue # ignore incomplete torrents
+        is_paused = torrent.state_enum.is_paused
+
+        if is_completed(torrent):
+            if not is_paused and torrent.state_enum != TorrentState.FORCED_UPLOAD: # not in ['forcedUP']:
+                pause_list.append(torrent)
+        elif is_paused:
+                resume_list.append(torrent)
+
+    return pause_list, resume_list
+
+
+def main():
+    clients = init_clients(json.loads(os.getenv("QBIT_CLIENTS", "[]")))
+
+    for qbt_client in clients:
         torrents = qbt_client.torrents_info()
 
-        pause, resume = list(), list()
-        for t in torrents:
-            if t.progress != 1: continue # ignore incomplete torrents
-            # paused = t.state in ['pausedUP', 'stoppedUP']
-            paused = t.state_enum.is_paused #
+        pause_list, resume_list = classify_torrents(torrents)
 
-            if completed(t):
-                if not paused and t.state not in ['forcedUP']:
-                    pause.append(t)
-            elif paused:
-                    resume.append(t)
-
-        logger.info("Should be paused:")
-        if pause:
-            for t in pause:
-                logger.info(f"{t['name']} ({t.tracker[8:20]}..) is beyond his sharelimits")
+        if pause_list:
+            logger.info("Torrents beyond their sharelimits:")
+            for torrent in pause_list:
+                logger.info(f"{torrent['name']} ({torrent.tracker[8:20]}..)")
             if AUTO_PAUSE:
-                qbt_client.torrents_stop({t['hash'] for t in pause})
-        logger.info("Should be active:")
-        if resume:
-            for t in resume:
-                logger.info(f"{t['name']} ({t.tracker[8:20]}..) not reached sharelimit")
+                try:
+                    qbt_client.torrents_pause({t['hash'] for t in pause_list})
+                except Exception as e:
+                    logger.warning(f"Error pausing torrents: {e}")
+
+        if resume_list:
+            logger.info("Torrents paused prematurely:")
+            for torrent in resume_list:
+                logger.info(f"{torrent['name']} ({torrent.tracker[8:20]}..)")
             if AUTO_RESUME:
-                pass
-                qbt_client.torrents_start({t['hash'] for t in resume})
+                try:
+                    qbt_client.torrents_resume({t['hash'] for t in resume_list})
+                except Exception as e:
+                    logger.warning(f"Error resuming torrents: {e}")
+
+
+if __name__ == "__main__":
+    main()

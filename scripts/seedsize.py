@@ -6,10 +6,12 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 import qbittorrentapi
 from collections import defaultdict, namedtuple
+TrackerStats = namedtuple("TrackerStats", ["size", "count"])
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 dotenv_path = os.path.join(script_dir, '.env')
 load_dotenv(dotenv_path, override=True)
+
 
 # ---------------- LOGGER ----------------
 def setup_logger():
@@ -81,7 +83,7 @@ def human_readable_size(size_in_bytes):
     else:
         return f"{size_in_bytes / 1024**5:.2f} PiB"
 
-TrackerStats = namedtuple("TrackerStats", ["size", "count"])
+
 def sum_seedsizes(torrent_list):
     uniquehashes = set()
     trackers = defaultdict(lambda: TrackerStats(0,0))
@@ -98,11 +100,13 @@ def sum_seedsizes(torrent_list):
         )
     return trackers
 
+
 def print_tracker_sizes(stats):
     sorted_stats = dict(sorted(stats.items(), key=lambda item: item[1].size, reverse=True))
 
     for name, tracker in sorted_stats.items():
         logger.info(f"{name} ({tracker.count}): {human_readable_size(tracker.size)}")
+
 
 def main():
     allt = []
@@ -114,6 +118,7 @@ def main():
         print_tracker_sizes(stats)
     except Exception as e:
         print(f'{e}')
+
 
 if __name__ == "__main__":
     main()
