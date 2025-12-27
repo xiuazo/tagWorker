@@ -1,16 +1,12 @@
 import os
 import json
 import logging
+import humanize
 from logging.handlers import TimedRotatingFileHandler
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 import qbittorrentapi
 from collections import defaultdict, namedtuple
-TrackerStats = namedtuple("TrackerStats", ["size", "count"])
-
-script_dir = os.path.dirname(os.path.abspath(__file__))
-dotenv_path = os.path.join(script_dir, '.env')
-load_dotenv(dotenv_path, override=True)
 
 
 # ---------------- LOGGER ----------------
@@ -47,7 +43,6 @@ def setup_logger():
 
     return logger
 
-logger = setup_logger()
 
 def get_clients():
     clients = {}
@@ -67,21 +62,6 @@ def get_clients():
         except Exception as e:
             logger.error(f"❌ Error al conectar con {name} ({c['url']}): {e}")
     return clients
-
-def human_readable_size(size_in_bytes):
-    """Convierte un tamaño en bytes a una cadena en formato humano (KiB, MiB, GiB, etc.)."""
-    if size_in_bytes < 1024:
-        return f"{size_in_bytes} B"
-    elif size_in_bytes < 1024**2:
-        return f"{size_in_bytes / 1024:.2f} KiB"
-    elif size_in_bytes < 1024**3:
-        return f"{size_in_bytes / 1024**2:.2f} MiB"
-    elif size_in_bytes < 1024**4:
-        return f"{size_in_bytes / 1024**3:.2f} GiB"
-    elif size_in_bytes < 1024**5:
-        return f"{size_in_bytes / 1024**4:.2f} TiB"
-    else:
-        return f"{size_in_bytes / 1024**5:.2f} PiB"
 
 
 def sum_seedsizes(torrent_list):
@@ -105,7 +85,7 @@ def print_tracker_sizes(stats):
     sorted_stats = dict(sorted(stats.items(), key=lambda item: item[1].size, reverse=True))
 
     for name, tracker in sorted_stats.items():
-        logger.info(f"{name} ({tracker.count}): {human_readable_size(tracker.size)}")
+        logger.info(f"{name} ({tracker.count}): {humanize.naturalsize(tracker[0], binary=True, format='%.2f')}")
 
 
 def main():
@@ -121,4 +101,9 @@ def main():
 
 
 if __name__ == "__main__":
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    dotenv_path = os.path.join(script_dir, '.env')
+    load_dotenv(dotenv_path, override=True)
+    TrackerStats = namedtuple("TrackerStats", ["size", "count"])
+    logger = setup_logger()
     main()
