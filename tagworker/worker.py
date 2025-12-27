@@ -20,13 +20,14 @@ METHOD_DICT: int = 1
 
 DEFAULT_ISSUE_METHOD: int = METHOD_API
 
-SAFE_ORPHANS: int = 50
+SAFE_ORPHANS: int = 250
 
 class worker:
     instances: set = set()
     reacted: dict = dict()
 
     new_torrents: bool = False
+
 
     def __init__(self, name: str, config, trackerissue_method: int = DEFAULT_ISSUE_METHOD, tag_interval: int = 15, disk_interval: int = 1800) -> None:
         self.client: qBit = qBit(config.url, config.user, config.password)
@@ -47,12 +48,13 @@ class worker:
         self.tag_interval: int = tag_interval
         self.disk_interval: int = disk_interval
 
-        self.lock: threading.Lock = threading.Lock()
+        # self.lock: threading.Lock = threading.Lock()
         self.tag_running: threading.Event = threading.Event()
         self.disk_running: threading.Event = threading.Event()
 
         self.__class__.reacted[self] = False
         self.__class__.instances.add(self)
+
 
     def run(self, singlerun: bool = False) -> bool | None:
         if not self.verify_credentials(): return False
@@ -63,30 +65,30 @@ class worker:
                 self.task_disk()
             return None
 
-        schedule.every(self.tag_interval).seconds.do(
-            lambda: threading.Thread(target=self.task_tag).start()
-        )
-        threading.Thread(target=self.task_tag).start()
+        schedule.every(self.tag_interval).seconds.do(self.task_tag)
+        self.task_tag()
 
         if self.local_client:
-            schedule.every(self.disk_interval).seconds.do(
-                lambda: threading.Thread(target=self.task_disk).start()
-            )
-            threading.Thread(target=self.task_disk).start()
+            schedule.every(self.disk_interval).seconds.do(self.task_disk)
+            self.task_disk()
         return True
+
 
     @classmethod
     def get_instances(cls) -> set:
         return cls.instances
+
 
     @classmethod
     def all_instances_iterator(cls):
         for instance in cls.instances:
             yield instance
 
+
     # @property
     # def is_running(self) -> bool:
     #     return bool(self.tag_thread or self.disk_thread)
+
 
     def verify_credentials(self) -> bool:
         try:
@@ -97,8 +99,10 @@ class worker:
             logger.error(f"{self.name:<10} - unable to log in. client disabled. {e}")
             return False
 
+
     def logout(self) -> None:
         self.client.auth_log_out()
+
 
     def torrents_changed(self, prop: set | str) -> dict:
         # obtengo la informacion de los cambios de los torrents
@@ -108,130 +112,124 @@ class worker:
         all_torrents = self.client.torrentdict
         return {th: all_torrents[th] for th, tv in changed_t.items() if not watched_props or (watched_props & tv.keys())}
 
+
     def task_tag(self) -> None:
-        BUSY_WAIT: int = 10
-        if self.lock.locked() or self.disk_running.is_set():
-            logger.warning(f"{self.name:<10} - Busy. Retrying in {BUSY_WAIT}s... (selflock: {self.lock.locked()}/diskrun: {self.disk_running.is_set()}) ")
-            threading.Timer(BUSY_WAIT, lambda: threading.Thread(target=self.task_tag).start()).start()
-            return
-        if self.tag_running.is_set():
-            logger.warning(f"{self.name:<10} - Already executing. Ignoring.")
+        if self.tag_running.is_set() or self.disk_running.is_set():
+            logger.warning(f"{self.name:<10} - Busy (Skipping run) ({self.tag_running.is_set() = } / {self.disk_running.is_set() = }) ")
             return
 
         self.tag_running.set()
         sl_torrent_queue = set()
 
-        with self.lock:
-            try:
-                while True:
-                    prev_torrents = set(self.client.torrentdict.keys())
+        try:
+            while True:
+                prev_torrents = set(self.client.torrentdict.keys())
 
-                    request_fullsync = time.time() - self._full_update_time > parse(GlobalConfig.get('app.fullsync_interval'))
-                    if request_fullsync:
-                        logger.info("%-10s - SYNCING WITH FULL DATA", self.name)
-                        self._full_update_time = time.time()
-                    self.client.do_sync(request_fullsync)
+                request_fullsync = time.time() - self._full_update_time > parse(GlobalConfig.get('app.fullsync_interval'))
+                if request_fullsync:
+                    logger.info("%-10s - SYNCING WITH FULL DATA", self.name)
+                    self._full_update_time = time.time()
+                self.client.do_sync(request_fullsync)
 
-                    tag_funcs = {
-                        'tag_trackers': self.tag_trackers,
-                        'tag_HR': self.tag_HR,
-                        'scan_no_tmm': self.tag_TMM,
-                        'tag_issues': self.tag_issues,
-                        'tag_rename': self.tag_rename,
-                        'tag_lowseeds': self.tag_lowseeds,
-                        'tag_HUNO': self.tag_HUNO,
-                    }
+                tag_funcs = {
+                    'tag_trackers': self.tag_trackers,
+                    'tag_HR': self.tag_HR,
+                    'scan_no_tmm': self.tag_TMM,
+                    'tag_issues': self.tag_issues,
+                    'tag_rename': self.tag_rename,
+                    'tag_lowseeds': self.tag_lowseeds,
+                    'tag_HUNO': self.tag_HUNO,
+                }
 
-                    tags_changed: bool = False
-                    for key, func in tag_funcs.items():
-                        if self.commands.get(key, False):
-                            changes = func()
-                            if changes: logger.debug(f"{self.name:<10} - {key} made changes.")
-                            tags_changed |= changes
+                tags_changed: bool = False
+                for key, func in tag_funcs.items():
+                    if self.commands.get(key, False):
+                        changes = func()
+                        if changes: logger.debug(f"{self.name:<10} - {key} made changes.")
+                        tags_changed |= changes
 
-                    # curr_torrents = set(self.client.status.get('torrents', {}).keys())
-                    curr_torrents = set(self.client.torrentdict.keys())
-                    if curr_torrents != prev_torrents:
-                        logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need to check dupes")
-                        # podria estar ya a true y con alguna instancia ya reaccionada. estas se lo podrian perder
-                        self.__class__.reacted = {key: False for key in self.__class__.reacted}
+                # curr_torrents = set(self.client.status.get('torrents', {}).keys())
+                curr_torrents = set(self.client.torrentdict.keys())
+                if curr_torrents != prev_torrents:
+                    logger.info(f"{self.name:<10} - torrentlist changed. broadcasting need to check dupes")
+                    # podria estar ya a true y con alguna instancia ya reaccionada. estas se lo podrian perder
+                    self.__class__.reacted = {key: False for key in self.__class__.reacted}
 
-                    # si el usuario quiere, si han habido novedades desde el ultimo scan
-                    # ... y si el resto de instancias estan ya pobladas!
-                    # tag_dupes devuelve None si no encuentra ningun otro cliente poblado
-                    if GlobalConfig.get('app.dupes.enabled', False) and not self.__class__.reacted[self]:
-                        try:
-                            tags_changed |= self.tag_dupes()
-                            self.__class__.reacted[self] = True
-                        except Exception as e:
-                            if str(e) != "Not all clients are synced": raise
+                # si el usuario quiere, si han habido novedades desde el ultimo scan
+                # ... y si el resto de instancias estan ya pobladas!
+                # tag_dupes devuelve None si no encuentra ningun otro cliente poblado
+                if GlobalConfig.get('app.dupes.enabled', False) and not self.__class__.reacted[self]:
+                    try:
+                        tags_changed |= self.tag_dupes()
+                        self.__class__.reacted[self] = True
+                    except Exception as e:
+                        if str(e) != "Not all clients are synced": raise
 
-                    tags_changed |= self.clean_noHL()
+                tags_changed |= self.clean_noHL()
 
-                    sl_torrent_queue |= set(self.torrents_changed({'state', 'category', 'max_seeding_time', 'up_limit', 'tags'}).keys())
+                sl_torrent_queue |= set(self.torrents_changed({'state', 'category', 'max_seeding_time', 'up_limit', 'tags'}).keys())
 
-                    if tags_changed:
-                        logger.debug(f"{self.name:<10} - changes have been made. looping...")
-                        time.sleep(5)
-                    else:
-                        # cuando los tags están en orden es cuando ajustamos SL
-                        if self.commands.get('share_limits', False): self.set_sharelimits(sl_torrent_queue)
-                        sl_torrent_queue.clear()
-                        break
-            finally:
-                self.tag_running.clear()
+                if tags_changed:
+                    logger.debug(f"{self.name:<10} - changes have been made. looping...")
+                    time.sleep(5)
+                else:
+                    # cuando los tags están en orden es cuando ajustamos SL
+                    if self.commands.get('share_limits', False): self.set_sharelimits(sl_torrent_queue)
+                    sl_torrent_queue.clear()
+                    break
+        finally:
+            self.tag_running.clear()
 
 
     def task_disk(self) -> None:
         if not self.local_client:
             return
 
-        if not self.client.synced:
-            logger.warning(f"{self.name:<10} - Client not synced yet. Retrying in 10s...")
-            threading.Timer(10, lambda: threading.Thread(target=self.task_disk).start()).start()
-            return
-        if self.lock.locked() or self.tag_running.is_set():
-            logger.warning(f"{self.name:<10} - Busy. Retrying in 10s... (selflock: {self.lock.locked()}/tagrun: {self.tag_running.is_set()}) ")
-            threading.Timer(10, lambda: threading.Thread(target=self.task_disk).start()).start()
-            return
+        BUSY_WAIT: int = 5
+        while not self.client.synced:
+            logger.warning(f"{self.name:<10} - Client not synced yet. Retrying in {BUSY_WAIT}s...")
+            time.sleep(BUSY_WAIT)
+        while self.tag_running.is_set():
+            logger.warning(f"{self.name:<10} - Busy. Retrying in {BUSY_WAIT}s... ({self.tag_running.is_set() = }) ")
+            time.sleep(BUSY_WAIT)
+            # return
         if self.disk_running.is_set():
-            logger.warning(f"{self.name:<10} - Already executing. Ignoring.")
+            logger.warning(f"{self.name:<10} - Busy. (Already executing. Skipping.)")
             return
 
         self.disk_running.set()
 
         commands: dict[str, bool] = self.commands
         dry_run: bool = self.dryrun
+        tagged: bool = False
+        logger.info(f"{self.name:<10} - disk task started")
 
-        with self.lock:
-            try:
-                tagged: bool = False
-                logger.info(f"{self.name:<10} - disk task started")
+        try:
 
-                if commands.get('tag_noHL'):
-                    # logger.info(f"{self.name:<10} - checking hardlinks")
-                    tagged = self.disk_noHL()
-                if commands.get('clean_orphaned'):
-                    # logger.info(f"{self.name:<10} - moving orphan files")
-                    self.disk_orphans(dry_run)
+            if commands.get('tag_noHL'):
+                # logger.info(f"{self.name:<10} - checking hardlinks")
+                tagged = self.disk_noHL()
+            if commands.get('clean_orphaned'):
+                # logger.info(f"{self.name:<10} - moving orphan files")
+                self.disk_orphans(dry_run)
 
-                if commands.get('prune_orphaned'):
-                    # logger.info(f"{self.name:<10} - pruning old orphans")
-                    self.disk_prune_old(dry_run)
+            if commands.get('prune_orphaned'):
+                # logger.info(f"{self.name:<10} - pruning old orphans")
+                self.disk_prune_old(dry_run)
 
-                if commands.get('delete_empty_dirs'):
-                    remove_empty_dirs(self.folders.get('root_path'), dry_run, self.name)
+            if commands.get('delete_empty_dirs'):
+                remove_empty_dirs(self.folders.get('root_path'), dry_run, self.name)
 
-            except Exception as e:
-                logger.error(f"Error: {e}\n{traceback.format_exc()}")
-            finally:
-                self.disk_running.clear()
+        except Exception as e:
+            logger.error(f"Error: {e}\n{traceback.format_exc()}")
+        finally:
+            self.disk_running.clear()
 
-            logger.info(f"{self.name:<10} - disk task done")
-            if tagged:
-                logger.debug(f"{self.name:<10} - triggering tag task")
-                threading.Thread(target=self.task_tag).start()
-            # if singlerun: break
+        logger.info(f"{self.name:<10} - disk task done")
+        if tagged:
+            logger.debug(f"{self.name:<10} - triggering tag task")
+            threading.Thread(target=self.task_tag).start()
+        # if singlerun: break
 
 
     def disk_orphans(self, dry_run: bool = True) -> None:
@@ -882,7 +880,7 @@ class worker:
 
                 if p_autodelete:
                     if completed and torrent.get('state') == 'pausedUP':
-                        logger.debug(f"Torrent {torrent.get('name')} autodeleted.")
+                        logger.debug(f"{self.name:<10} - Torrent {torrent.get('name')} marked for autodeletion.")
                         delete.add(h)
 
 
