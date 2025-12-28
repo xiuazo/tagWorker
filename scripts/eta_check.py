@@ -56,7 +56,7 @@ def is_completed(torrent):
     return torrent.seeding_time >= maxtime
 
 
-def init_clients(client_definitions) -> list[Client]:
+def init_clients(client_definitions):
     clients = []
     for c in client_definitions:
         name = c.get('name')
