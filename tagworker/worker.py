@@ -20,7 +20,7 @@ METHOD_DICT: int = 1
 
 DEFAULT_ISSUE_METHOD: int = METHOD_API
 
-SAFE_ORPHANS: int = 250
+SAFE_ORPHANS: int = 50
 
 class worker:
     instances: set = set()
@@ -56,7 +56,7 @@ class worker:
         self.__class__.instances.add(self)
 
 
-    def run(self, singlerun: bool = False) -> bool | None:
+    def run(self, singlerun: bool = False):
         if not self.verify_credentials(): return False
 
         if singlerun:
@@ -104,7 +104,7 @@ class worker:
         self.client.auth_log_out()
 
 
-    def torrents_changed(self, prop: set | str) -> dict:
+    def torrents_changed(self, prop):
         # obtengo la informacion de los cambios de los torrents
         changed_t = self.client.sync_data.get('torrents', {})
         # ahora filtro los que no han tenido cambios que nos importen
@@ -202,7 +202,7 @@ class worker:
         commands: dict[str, bool] = self.commands
         dry_run: bool = self.dryrun
         tagged: bool = False
-        logger.info(f"{self.name:<10} - disk task started")
+        logger.debug(f"{self.name:<10} - disk task started")
 
         try:
 
@@ -225,7 +225,7 @@ class worker:
         finally:
             self.disk_running.clear()
 
-        logger.info(f"{self.name:<10} - disk task done")
+        logger.debug(f"{self.name:<10} - disk task done")
         if tagged:
             logger.debug(f"{self.name:<10} - triggering tag task")
             threading.Thread(target=self.task_tag).start()
@@ -356,7 +356,7 @@ class worker:
         # si tiene HL fuera, el fichero deberia tener una cantidad de links superior a los que hemos encontrado
         #
         # en caso de multifile miraremos fichero a fichero sus contenidos hasta encontrar alguno que si tenga HL fuera
-        def torrent_has_HL(torrent: dict[str, str], inode_map: dict[int, int], translation_table: dict[str, str]) -> bool:
+        def torrent_has_HL(torrent, inode_map, translation_table) -> bool:
             # TODO en que situacion esta vacio?? soltar excepcion?? continuar??
             # try:
             content_path: str|None = torrent.get("content_path", None)
@@ -404,11 +404,12 @@ class worker:
                 logger.info(f"{self.name:<10} - found link for: {torrent.get('name', 'Unknown')}")
                 deltag.add(thash)
 
-        if addtag: self.client.add_tags(addtag, noHL_tag)
-        if deltag: self.client.remove_tags(deltag, noHL_tag)
-
-        logger.info(f"{self.name:<10} - {len(noHLs)} noHL. New {len(addtag)} - Untagged {len(deltag)}")
-        return bool(addtag or deltag)
+        if addtag or deltag:
+            if addtag: self.client.add_tags(addtag, noHL_tag)
+            if deltag: self.client.remove_tags(deltag, noHL_tag)
+            logger.info(f"{self.name:<10} - {len(noHLs)} noHL. New {len(addtag)} - Untagged {len(deltag)}")
+            return True
+        return False
 
     def clean_noHL(self) -> bool:
         """
@@ -440,7 +441,7 @@ class worker:
         return bool(hashes)
 
     def tag_lowseeds(self) -> bool:
-        torrents: dict[str, dict[str, str]] = self.torrents_changed({'num_seeds', 'tags', 'tracker', 'state'})
+        torrents: dict[str, dict[str, str]] = self.torrents_changed({'num_complete', 'tags', 'tracker', 'state'})
         if not torrents:
             return False
 
@@ -451,7 +452,7 @@ class worker:
         for thash, torrent in torrents.items():
             tags: list[str] = torrent.get("tags", "").split(", ")
             seeds: int = int(torrent.get('num_complete', 0))
-            if torrent.get("progress", 0) != 1 or torrent.get('state','') in ['pausedUP','pausedDL', 'error', 'unknown']: # filtramos solos los que estan seeding XD
+            if torrent.get("progress", 0) != 1 or torrent.get('state','') in ['stoppedUP', 'pausedUP', 'pausedDL', 'error', 'unknown']: # filtramos solos los que estan vivos XD
                 continue
             if seeds < min_seeds and isinstance(seeds, int):
                 if tag not in tags:
@@ -510,7 +511,7 @@ class worker:
         errortag = GlobalConfig.get("app.issue.tag")
         for thash, torrent in torrents.items():
             ttags = torrent.get("tags", "").split(", ")
-            if torrent.get('state') in ['pausedUP','pausedDL', 'error', 'unknown']:
+            if torrent.get('state') in ['stoppedUP', 'pausedUP','pausedDL', 'error', 'unknown']:
                 if errortag in ttags:
                     unerrored.add(thash)
                 continue
@@ -586,7 +587,7 @@ class worker:
                     else:
                         if hr_tag not in torrent_tags:
                             unsatisfied.add(thash)
-                        if torrent['state'] in {'pausedUP'}:  # y queuedUP ??
+                        if torrent['state'] in {'stoppedUP', 'pausedUP'}:  # y queuedUP ??
                             autostart.add(thash)
                     break
 
@@ -873,13 +874,13 @@ class worker:
                 maxtime = torrent['max_seeding_time'] * 60
                 completed = maxtime >= 0 and maxtime < torrent['seeding_time']
                 if p_autoresume:
-                    if torrent.get('state') == 'pausedUP' and not completed:
+                    if torrent.get('state') in ['stoppedUP', 'pausedUP'] and not completed:
                         # FIXME
                         logger.debug(f"{self.name:<10} - Resuming {torrent.get('name')}.")
                         resume.add(h)
 
                 if p_autodelete:
-                    if completed and torrent.get('state') == 'pausedUP':
+                    if completed and torrent.get('state') in ['stoppedUP', 'pausedUP']:
                         logger.debug(f"{self.name:<10} - Torrent {torrent.get('name')} marked for autodeletion.")
                         delete.add(h)
 
