@@ -1,15 +1,9 @@
 import os
 import json
-import sys
-import logging
-
 from pathlib import Path
-
-from logging.handlers import TimedRotatingFileHandler
-
-from qbittorrentapi import Client, LoginFailed
 from collections import defaultdict, namedtuple
 from dotenv import load_dotenv
+import utils
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 dotenv_path = os.path.join(script_dir, '.env')
@@ -27,59 +21,8 @@ PREFIX_TAG = os.getenv('XSEED_TAG_PREFIX', "")
 POSTFIX_TAG = os.getenv('XSEED_TAG_POSTFIX', ".cross-seed")
 XS_ORPHAN_TAG = os.getenv('XSEED_TAG_ORPHAN', f"@{XSEED_FOLDER}-only")
 
-# ---------------- LOGGER ----------------
-def setup_logger():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    log_dir = os.path.join(base_dir, "..", "logs")  # → ../logs/
-    log_dir = os.path.abspath(log_dir)              # Normaliza la ruta
-    os.makedirs(log_dir, exist_ok=True)
 
-
-    script_name = os.path.splitext(os.path.basename(__file__))[0]  # → "blah"
-    log_file = os.path.join(log_dir, f"{script_name}.log")
-
-    formatter = logging.Formatter(
-        fmt="[%(asctime)s UTC] [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-
-    # Rotación diaria, conserva 7 días
-    file_handler = TimedRotatingFileHandler(
-        log_file, when="midnight", interval=1, backupCount=7, encoding="utf-8"
-    )
-    file_handler.setFormatter(formatter)
-
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-
-    logger = logging.getLogger("xseedTags")
-    logger.setLevel(logging.INFO)
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-
-    # Evitar duplicados
-    logger.propagate = False
-
-    return logger
-
-logger = setup_logger()
-
-
-def init_clients(config):
-    name = config.get('name')
-    client = Client(host=config['url'], username=config['user'], password=config['pass'])
-    try:
-        client.auth_log_in()
-        logger.info(f"✅ Conectado a instancia {name} ({config['url']})")
-    except LoginFailed as e:
-        logger.warning(f"⚠️ Falló el login de {name}: {e}")
-    except Exception as e:
-        logger.error(f"❌ Error al conectar con {name} ({config['url']}): {e}")
-    finally:
-        return client
-
-
-def build_inode_dict(rootdir: Path):
+def build_inode_dict(rootdir):
     inode_dict = {}
     for path in rootdir.rglob('*'):  # recorre recursivamente
         if path.is_file():
@@ -91,7 +34,7 @@ def build_inode_dict(rootdir: Path):
     return inode_dict
 
 
-def translate_path(qbit_path: str) -> Path:
+def translate_path(qbit_path):
     qbit = Path(qbit_path)
 
     try:
@@ -101,7 +44,7 @@ def translate_path(qbit_path: str) -> Path:
         return qbit.resolve()
 
 
-def get_top_level_folder(relative_path: Path | str) -> str:
+def get_top_level_folder(relative_path):
     p = Path(relative_path)
     if not p.parts:
         raise ValueError("Invalid or empty relative path.")
@@ -166,7 +109,7 @@ def apply_tags(session, tag_queue):
 
 
 def main():
-    qbt_client = init_clients(json.loads(os.getenv("QBIT_CLIENTS", "[]"))[0])
+    qbt_client = utils.init_clients(json.loads(os.getenv("QBIT_CLIENTS", "[]")), single=True)
     torrents = qbt_client.torrents_info(category=TORRENT_CATEGORY)
 
     if not torrents:
@@ -186,4 +129,5 @@ def main():
 
 
 if __name__ == "__main__":
+    logger = utils.setup_logger("xseedTags")
     main()
