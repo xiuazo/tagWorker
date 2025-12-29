@@ -135,7 +135,7 @@ def main():
                 schedule.run_pending()
                 time.sleep(1)
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
+            logger.error(f"Unexpected error: {e}", exc_info=True)
         finally:
             logger.info(f"Shutdown requested...")
         # except KeyboardInterrupt:
