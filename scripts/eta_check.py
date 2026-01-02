@@ -45,24 +45,24 @@ def main():
         pause_list, resume_list = classify_torrents(torrents)
 
         if pause_list:
-            utils.info("Torrents beyond their sharelimits:")
+            logger.info("Torrents beyond their sharelimits:")
             for torrent in pause_list:
-                utils.info(f"{torrent['name']} ({torrent.tracker[8:20]}..)")
+                logger.info(f"{torrent['name']} ({torrent.tracker[8:20]}..)")
             if AUTO_PAUSE:
                 try:
                     qbt_client.torrents_pause({t['hash'] for t in pause_list})
                 except Exception as e:
-                    utils.warning(f"Error pausing torrents: {e}")
+                    logger.warning(f"Error pausing torrents: {e}")
 
         if resume_list:
-            utils.info("Torrents paused prematurely:")
+            logger.info("Torrents paused prematurely:")
             for torrent in resume_list:
-                utils.info(f"{torrent['name']} ({torrent.tracker[8:20]}..)")
+                logger.info(f"{torrent['name']} ({torrent.tracker[8:20]}..)")
             if AUTO_RESUME:
                 try:
                     qbt_client.torrents_resume({t['hash'] for t in resume_list})
                 except Exception as e:
-                    utils.warning(f"Error resuming torrents: {e}")
+                    logger.warning(f"Error resuming torrents: {e}")
 
 
 if __name__ == "__main__":
