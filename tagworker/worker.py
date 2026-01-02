@@ -20,8 +20,6 @@ METHOD_DICT: int = 1
 
 DEFAULT_ISSUE_METHOD: int = METHOD_API
 
-SAFE_ORPHANS: int = 50
-
 class worker:
     instances: set = set()
     reacted: dict = dict()
@@ -127,7 +125,7 @@ class worker:
 
                 request_fullsync = time.time() - self._full_update_time > parse(GlobalConfig.get('app.fullsync_interval'))
                 if request_fullsync:
-                    logger.info("%-10s - SYNCING WITH FULL DATA", self.name)
+                    logger.info("%-10s - *** FULL SYNC ***", self.name)
                     self._full_update_time = time.time()
                 self.client.do_sync(request_fullsync)
 
@@ -310,8 +308,8 @@ class worker:
 
         logger.info(f"{self.name:<10} - {len(orphans)} orphan files moved to {orphan}")
 
-
-        if len(orphans) > SAFE_ORPHANS:
+        condom = GlobalConfig.get('app.orphan_maxfiles', 0)
+        if condom > 0 and len(orphans) > condom:
             dry_run = True
             logger.warning(f"Found {len(orphans)} orphans. Enforcing dry-run!")
         for f in sorted(orphans):
